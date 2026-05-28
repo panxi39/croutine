@@ -1,0 +1,158 @@
+#include "croutine_event.h"
+#include "scheduler.h"
+#include "task.h"
+#include "tls.h"
+#include "types.h"
+#include "worker.h"
+
+#include <stdatomic.h>
+#include <stdlib.h>
+#include <string.h>
+
+static void croutine_task_entry_wrapper(void) {
+	struct croutine_task *task = croutine_current_task;
+
+	if (task == NULL || task->scheduler == NULL || task->func == NULL)
+		abort();
+
+	task->result = task->func(task->arg);
+	atomic_store_explicit(&task->state, CROUTINE_TASK_FINISHED,
+						  memory_order_release);
+	croutine_task_enter_scheduler();
+	abort();
+}
+
+int croutine_task_init(struct croutine_task *task,
+					   struct croutine_worker *worker, void *stack_base,
+					   size_t stack_size, croutine_task_fn func, void *arg) {
+	if (task == NULL || stack_base == NULL || stack_size == 0 || func == NULL)
+		return -1;
+
+	memset(task, 0, sizeof(*task));
+	task->scheduler = worker != NULL ? worker->scheduler : NULL;
+	task->worker = worker;
+	croutine_list_init(&task->scheduler_node);
+	croutine_list_init(&task->state_node);
+	task->stack_base = stack_base;
+	task->stack_size = stack_size;
+	task->func = func;
+	task->arg = arg;
+	task->result = NULL;
+	task->result_policy = CROUTINE_TASK_RESULT_DETACHED;
+	atomic_init(&task->state, CROUTINE_TASK_PENDING);
+
+	return croutine_arch_context_init(&task->context, stack_base, stack_size,
+									  croutine_task_entry_wrapper);
+}
+
+void croutine_task_init_current(struct croutine_task *task) {
+	if (task == NULL) {
+		croutine_current_task = NULL;
+		return;
+	}
+
+	atomic_store_explicit(&task->state, CROUTINE_TASK_RUNNING,
+						  memory_order_release);
+	croutine_current_task = task;
+}
+
+void croutine_task_enter_scheduler(void) {
+	struct croutine_task *task = croutine_current_task;
+
+	if (task == NULL || task->worker == NULL || task->worker->schedule == NULL)
+		abort();
+
+	croutine_arch_store_and_call(&task->context, task->worker->schedule);
+}
+
+void croutine_task_resume(struct croutine_task *task) {
+	if (task == NULL || task->worker == NULL)
+		abort();
+
+	croutine_current_worker = task->worker;
+	croutine_current_task = task;
+	atomic_store_explicit(&task->state, CROUTINE_TASK_RUNNING,
+						  memory_order_release);
+
+	croutine_arch_resume_and_ret(&task->context);
+	abort();
+}
+
+int croutine_task_enqueue(struct croutine_task *task) {
+	struct croutine_worker *worker;
+	struct croutine_scheduler *scheduler;
+
+	if (task == NULL || task->scheduler == NULL)
+		return -1;
+
+	scheduler = task->scheduler;
+	worker = task->worker;
+	if (worker != NULL && croutine_worker_enqueue_local(worker, task) == 0)
+		return 0;
+
+	task->worker = NULL;
+	return croutine_scheduler_enqueue_main(scheduler, task);
+}
+
+int croutine_task_wake(struct croutine_task *task) {
+	struct croutine_main_event_source *source;
+	struct croutine_worker *worker;
+	struct croutine_scheduler *scheduler;
+	enum croutine_task_state expected;
+
+	if (task == NULL || task->scheduler == NULL)
+		return -1;
+
+	scheduler = task->scheduler;
+	worker = task->worker;
+	expected = CROUTINE_TASK_PENDING;
+	if (!atomic_compare_exchange_strong_explicit(
+			&task->state, &expected, CROUTINE_TASK_READY, memory_order_acq_rel,
+			memory_order_acquire)) {
+		expected = CROUTINE_TASK_WAITING;
+		if (!atomic_compare_exchange_strong_explicit(
+				&task->state, &expected, CROUTINE_TASK_READY,
+				memory_order_acq_rel, memory_order_acquire))
+			return -1;
+	}
+
+	if (croutine_task_enqueue(task) != 0)
+		abort();
+
+	if (worker != NULL && task->worker == worker) {
+		source = worker->main_event_source;
+		if (worker != croutine_current_worker && source != NULL &&
+			source->wake != NULL)
+			(void)source->wake(source);
+		return 0;
+	}
+
+	croutine_scheduler_wake_all(scheduler);
+	return 0;
+}
+
+void croutine_task_wait(void) {
+	struct croutine_task *task = croutine_current_task;
+
+	if (task == NULL)
+		abort();
+
+	atomic_store_explicit(&task->state, CROUTINE_TASK_WAITING,
+						  memory_order_release);
+	croutine_task_enter_scheduler();
+}
+
+void croutine_yield(void) {
+	struct croutine_task *task = croutine_current_task;
+
+	if (task == NULL)
+		abort();
+
+	atomic_store_explicit(&task->state, CROUTINE_TASK_READY,
+						  memory_order_release);
+	croutine_task_enter_scheduler();
+}
+
+struct croutine_task *croutine_task_current(void) {
+	return croutine_current_task;
+}
