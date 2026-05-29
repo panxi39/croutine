@@ -3,6 +3,11 @@
 
 #include <stddef.h>
 
+#define CROUTINE_DEFAULT_WORKERS 1
+#define CROUTINE_DEFAULT_STACK_SIZE (64 * 1024)
+#define CROUTINE_DEFAULT_LOCAL_QUEUE_CAPACITY 1024
+#define CROUTINE_DEFAULT_MAIN_QUEUE_QUOTA 1
+
 typedef struct croutine_task croutine_task;
 typedef struct croutine_wait_handle croutine_wait_handle;
 typedef struct croutine_worker croutine_worker;
@@ -24,6 +29,9 @@ typedef struct croutine_config {
 	size_t workers;
 	size_t main_queue_quota;
 	struct croutine_main_event_source_config main_event_source_config;
+	size_t stack_size;
+	size_t local_queue_capacity;
+	size_t main_queue_capacity;
 } croutine_config;
 
 int croutine_scheduler_create(croutine_scheduler **out,

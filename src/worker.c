@@ -186,7 +186,8 @@ int croutine_worker_init(struct croutine_worker *worker,
 		return -1;
 	worker->local_queue_lock_initialized = 1;
 	if (croutine_queue_init(&worker->local_queue,
-							CROUTINE_DEFAULT_READY_QUEUE_CAPACITY) != 0) {
+							(uint32_t)scheduler->config.local_queue_capacity) !=
+		0) {
 		pthread_mutex_destroy(&worker->local_queue_lock);
 		worker->local_queue_lock_initialized = 0;
 		return -1;

@@ -17,6 +17,38 @@ static int croutine_scheduler_state_allows_spawn(uint32_t state) {
 		   state == CROUTINE_SCHEDULER_RUNNING;
 }
 
+static int croutine_scheduler_normalize_config(struct croutine_config *out,
+											   const croutine_config *config) {
+	if (out == NULL || config == NULL ||
+		config->main_event_source_config.factory_fn == NULL)
+		return -1;
+
+	*out = *config;
+	if (out->workers == 0)
+		out->workers = CROUTINE_DEFAULT_WORKERS;
+	if (out->main_queue_quota == 0)
+		out->main_queue_quota = CROUTINE_DEFAULT_MAIN_QUEUE_QUOTA;
+	if (out->stack_size == 0)
+		out->stack_size = CROUTINE_DEFAULT_STACK_SIZE;
+	if (out->local_queue_capacity == 0)
+		out->local_queue_capacity = CROUTINE_DEFAULT_LOCAL_QUEUE_CAPACITY;
+
+	if (out->workers == 0 || out->workers > UINT32_MAX ||
+		out->local_queue_capacity == 0 ||
+		out->local_queue_capacity > UINT32_MAX || out->stack_size < 64)
+		return -1;
+
+	if (out->main_queue_capacity == 0) {
+		if (out->workers > UINT32_MAX / out->local_queue_capacity)
+			return -1;
+		out->main_queue_capacity = out->workers * out->local_queue_capacity;
+	} else if (out->main_queue_capacity > UINT32_MAX) {
+		return -1;
+	}
+
+	return 0;
+}
+
 static int
 croutine_scheduler_validate_source(struct croutine_main_event_source *source) {
 	return source != NULL && source->blocking_wait != NULL &&
@@ -243,22 +275,13 @@ int croutine_scheduler_create(croutine_scheduler **out,
 	uint32_t main_queue_capacity;
 	size_t index;
 
-	if (out == NULL || config == NULL ||
-		config->main_event_source_config.factory_fn == NULL)
+	if (out == NULL)
 		return -1;
 
 	*out = NULL;
-	normalized = *config;
-	if (normalized.workers == 0)
-		normalized.workers = 1;
-	if (normalized.workers > UINT32_MAX)
+	if (croutine_scheduler_normalize_config(&normalized, config) != 0)
 		return -1;
-	if (normalized.main_queue_quota == 0)
-		normalized.main_queue_quota = 1;
-	if (normalized.workers > UINT32_MAX / CROUTINE_DEFAULT_READY_QUEUE_CAPACITY)
-		return -1;
-	main_queue_capacity =
-		(uint32_t)normalized.workers * CROUTINE_DEFAULT_READY_QUEUE_CAPACITY;
+	main_queue_capacity = (uint32_t)normalized.main_queue_capacity;
 
 	scheduler = calloc(1, sizeof(*scheduler));
 	if (scheduler == NULL)

@@ -26,7 +26,8 @@ static void croutine_task_entry_wrapper(void) {
 int croutine_task_init(struct croutine_task *task,
 					   struct croutine_worker *worker, croutine_task_fn func,
 					   void *arg) {
-	if (task == NULL || func == NULL)
+	if (task == NULL || worker == NULL || worker->scheduler == NULL ||
+		func == NULL)
 		return -1;
 
 	memset(task, 0, sizeof(*task));
@@ -34,7 +35,7 @@ int croutine_task_init(struct croutine_task *task,
 	task->worker = worker;
 	croutine_list_init(&task->scheduler_node);
 	croutine_list_init(&task->state_node);
-	task->stack = croutine_stack_alloc(CROUTINE_DEFAULT_STACK_SIZE);
+	task->stack = croutine_stack_alloc(task->scheduler->config.stack_size);
 	if (task->stack == CROUTINE_STACK_ERROR)
 		return -1;
 	task->func = func;
