@@ -78,7 +78,7 @@ LIBOBJ  := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(LIBCSRC))
 LIBOBJ  += $(patsubst $(SRCDIR)/%.S,$(OBJDIR)/%.o,$(LIBASRC))
 
 # Tests
-TEST_FILES := structures.c scheduler.c runtime.c
+TEST_FILES := structures.c scheduler.c runtime.c stack.c
 TEST_NAMES := $(basename $(TEST_FILES))
 TEST_BINS  := $(addprefix $(TESTBINDIR)/,$(TEST_NAMES))
 TEST_RPATH := -Wl,-rpath,'$$ORIGIN/../lib'

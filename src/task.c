@@ -1,5 +1,6 @@
 #include "croutine_event.h"
 #include "scheduler.h"
+#include "stack.h"
 #include "task.h"
 #include "tls.h"
 #include "types.h"
@@ -23,9 +24,9 @@ static void croutine_task_entry_wrapper(void) {
 }
 
 int croutine_task_init(struct croutine_task *task,
-					   struct croutine_worker *worker, void *stack_base,
-					   size_t stack_size, croutine_task_fn func, void *arg) {
-	if (task == NULL || stack_base == NULL || stack_size == 0 || func == NULL)
+					   struct croutine_worker *worker, croutine_task_fn func,
+					   void *arg) {
+	if (task == NULL || func == NULL)
 		return -1;
 
 	memset(task, 0, sizeof(*task));
@@ -33,16 +34,24 @@ int croutine_task_init(struct croutine_task *task,
 	task->worker = worker;
 	croutine_list_init(&task->scheduler_node);
 	croutine_list_init(&task->state_node);
-	task->stack_base = stack_base;
-	task->stack_size = stack_size;
+	task->stack = croutine_stack_alloc(CROUTINE_DEFAULT_STACK_SIZE);
+	if (task->stack == CROUTINE_STACK_ERROR)
+		return -1;
 	task->func = func;
 	task->arg = arg;
 	task->result = NULL;
 	task->result_policy = CROUTINE_TASK_RESULT_DETACHED;
 	atomic_init(&task->state, CROUTINE_TASK_PENDING);
 
-	return croutine_arch_context_init(&task->context, stack_base, stack_size,
-									  croutine_task_entry_wrapper);
+	if (croutine_arch_context_init(&task->context, task->stack->bottom,
+								   task->stack->size,
+								   croutine_task_entry_wrapper) != 0) {
+		croutine_stack_free(task->stack);
+		task->stack = NULL;
+		return -1;
+	}
+
+	return 0;
 }
 
 void croutine_task_init_current(struct croutine_task *task) {

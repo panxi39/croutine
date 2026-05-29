@@ -52,6 +52,14 @@ enum croutine_task_result_policy {
 	CROUTINE_TASK_RESULT_COLLECT,
 };
 
+struct croutine_stack {
+	void *top;
+	void *bottom;
+	size_t size;
+	void *mmap_base;
+	size_t mmap_size;
+};
+
 struct croutine_task {
 	struct croutine_arch_context context;
 	struct croutine_scheduler *scheduler;
@@ -60,8 +68,7 @@ struct croutine_task {
 	croutine_list_head scheduler_node;
 	croutine_list_head state_node;
 
-	void *stack_base;
-	size_t stack_size;
+	struct croutine_stack *stack;
 	croutine_task_fn func;
 	void *arg, *result;
 	enum croutine_task_result_policy result_policy;

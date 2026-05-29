@@ -2,6 +2,7 @@
 
 #include "croutine_event.h"
 #include "scheduler.h"
+#include "stack.h"
 #include "task.h"
 #include "tls.h"
 #include "worker.h"
@@ -80,7 +81,7 @@ void croutine_scheduler_reclaim_task(struct croutine_scheduler *scheduler,
 		croutine_list_remove(&task->state_node);
 	pthread_mutex_unlock(&scheduler->tasks_lock);
 
-	free(task->stack_base);
+	croutine_stack_free(task->stack);
 	free(task);
 }
 
@@ -490,7 +491,6 @@ int croutine_spawn(croutine_scheduler *scheduler, croutine_task_fn func,
 	struct croutine_task *task;
 	struct croutine_worker *worker;
 	uint32_t state;
-	void *stack;
 
 	if (scheduler == NULL || func == NULL)
 		return -1;
@@ -500,8 +500,7 @@ int croutine_spawn(croutine_scheduler *scheduler, croutine_task_fn func,
 		return -1;
 
 	task = calloc(1, sizeof(*task));
-	stack = malloc(CROUTINE_DEFAULT_STACK_SIZE);
-	if (task == NULL || stack == NULL)
+	if (task == NULL)
 		goto fail_alloc;
 
 	pthread_mutex_lock(&scheduler->tasks_lock);
@@ -514,8 +513,7 @@ int croutine_spawn(croutine_scheduler *scheduler, croutine_task_fn func,
 	worker =
 		&scheduler->workers[scheduler->next_worker % scheduler->worker_count];
 	scheduler->next_worker++;
-	if (croutine_task_init(task, worker, stack, CROUTINE_DEFAULT_STACK_SIZE,
-						   func, arg) != 0) {
+	if (croutine_task_init(task, worker, func, arg) != 0) {
 		pthread_mutex_unlock(&scheduler->tasks_lock);
 		goto fail_alloc;
 	}
@@ -531,7 +529,8 @@ int croutine_spawn(croutine_scheduler *scheduler, croutine_task_fn func,
 	return 0;
 
 fail_alloc:
-	free(stack);
+	if (task != NULL)
+		croutine_stack_free(task->stack);
 	free(task);
 	return -1;
 }

@@ -1,5 +1,6 @@
 #include "arch.h"
 #include "croutine_structures.h"
+#include "stack.h"
 #include "task.h"
 #include "types.h"
 
@@ -160,13 +161,13 @@ static int init_run(struct run *run, struct config *config) {
 		test_task->id = index;
 		test_task->arg = (int)index;
 		test_task->repeat = run->repeat;
-		task->stack_size = TASK_STACK_SIZE;
 		task->func = task_entry;
 		task->arg = &test_task->arg;
 		task->state = CROUTINE_TASK_PENDING;
 
-		if (croutine_arch_context_init(
-				&task->context, task->stack_base, task->stack_size,
+		if (task->stack == NULL || task->stack == (struct croutine_stack *)-1 ||
+			croutine_arch_context_init(
+				&task->context, task->stack->bottom, task->stack->size,
 				(croutine_arch_entry)task_call_entry) != 0)
 			return -1;
 
@@ -237,7 +238,7 @@ static void destroy_tasks(struct test_task *tasks, size_t count) {
 		return;
 
 	for (index = 0; index < count; index++)
-		free(tasks[index].task.stack_base);
+		croutine_stack_free(tasks[index].task.stack);
 	free(tasks);
 }
 
@@ -250,8 +251,8 @@ static struct test_task *create_tasks(size_t count) {
 		return NULL;
 
 	for (index = 0; index < count; index++) {
-		tasks[index].task.stack_base = malloc(TASK_STACK_SIZE);
-		if (tasks[index].task.stack_base == NULL) {
+		tasks[index].task.stack = croutine_stack_alloc(TASK_STACK_SIZE);
+		if (tasks[index].task.stack == (struct croutine_stack *)-1) {
 			destroy_tasks(tasks, count);
 			return NULL;
 		}
