@@ -778,7 +778,7 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 	clock_gettime(CLOCK_REALTIME, &start);
 	wait->deadline = start;
 	add_microseconds(&wait->deadline, delay_microseconds);
-	if (croutine_wait_handle_init_simple(&wait->handle, current, wait,
+	if (croutine_wait_handle_init_default(&wait->handle, current, wait,
 										 timer_deadline_checker) != 0) {
 		timer_wait_free(wait);
 		return -1;

@@ -5,7 +5,7 @@
 #include <stdatomic.h>
 #include <string.h>
 
-static void croutine_wait_handle_init_common(
+static void croutine_wait_handle_init(
 	struct croutine_wait_handle *handle, struct croutine_task *task,
 	enum croutine_wait_handle_type type, void *data,
 	int (*checker)(void *data)) {
@@ -19,13 +19,13 @@ static void croutine_wait_handle_init_common(
 	handle->checker = checker;
 }
 
-int croutine_wait_handle_init_simple(struct croutine_wait_handle *handle,
+int croutine_wait_handle_init_default(struct croutine_wait_handle *handle,
 									 struct croutine_task *task, void *data,
 									 int (*checker)(void *data)) {
 	if (handle == NULL || task == NULL)
 		return -1;
 
-	croutine_wait_handle_init_common(handle, task, CROUTINE_WAIT_HANDLE_SIMPLE,
+	croutine_wait_handle_init(handle, task, CROUTINE_WAIT_HANDLE_SIMPLE,
 									 data, checker);
 	return 0;
 }
@@ -36,7 +36,7 @@ int croutine_wait_handle_init_complex(struct croutine_wait_handle *handle,
 	if (handle == NULL || task == NULL || refs == 0)
 		return -1;
 
-	croutine_wait_handle_init_common(handle, task, CROUTINE_WAIT_HANDLE_COMPLEX,
+	croutine_wait_handle_init(handle, task, CROUTINE_WAIT_HANDLE_COMPLEX,
 									 data, checker);
 	atomic_store_explicit(&handle->refcount.refs, refs, memory_order_release);
 	return 0;
