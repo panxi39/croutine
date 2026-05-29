@@ -3,12 +3,18 @@
 
 #include "croutine.h"
 
+enum croutine_main_event_wait_result {
+	CROUTINE_MAIN_EVENT_WAIT_DONE = 0,
+	CROUTINE_MAIN_EVENT_WAIT_EMPTY,
+	CROUTINE_MAIN_EVENT_WAIT_ERROR,
+};
+
 struct croutine_main_event_source {
-	void (*blocking_wait)(croutine_main_event_source *self);
+	enum croutine_main_event_wait_result (*blocking_wait)(
+		croutine_main_event_source *self);
 	void (*collect)(croutine_main_event_source *self);
 	int (*wake)(croutine_main_event_source *self);
 	void (*suspend)(croutine_main_event_source *self);
-	int (*resume)(croutine_main_event_source *self);
 	void (*destroy)(croutine_main_event_source *self);
 };
 

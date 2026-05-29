@@ -24,15 +24,14 @@ static void croutine_task_entry_wrapper(void) {
 }
 
 int croutine_task_init(struct croutine_task *task,
-					   struct croutine_worker *worker, croutine_task_fn func,
-					   void *arg) {
-	if (task == NULL || worker == NULL || worker->scheduler == NULL ||
-		func == NULL)
+					   struct croutine_scheduler *scheduler,
+					   croutine_task_fn func, void *arg) {
+	if (task == NULL || scheduler == NULL || func == NULL)
 		return -1;
 
 	memset(task, 0, sizeof(*task));
-	task->scheduler = worker != NULL ? worker->scheduler : NULL;
-	task->worker = worker;
+	task->scheduler = scheduler;
+	task->worker = NULL;
 	croutine_list_init(&task->scheduler_node);
 	croutine_list_init(&task->state_node);
 	task->stack = croutine_stack_alloc(task->scheduler->config.stack_size);
@@ -88,27 +87,31 @@ void croutine_task_resume(struct croutine_task *task) {
 	abort();
 }
 
-int croutine_task_enqueue(struct croutine_task *task) {
+enum croutine_task_enqueue_result
+croutine_task_enqueue(struct croutine_task *task) {
 	struct croutine_worker *worker;
 	struct croutine_scheduler *scheduler;
 
 	if (task == NULL || task->scheduler == NULL)
-		return -1;
+		return CROUTINE_TASK_ENQUEUE_ERROR;
 
 	scheduler = task->scheduler;
 	worker = task->worker;
 	if (worker != NULL && croutine_worker_enqueue_local(worker, task) == 0)
-		return 0;
+		return CROUTINE_TASK_ENQUEUE_LOCAL;
 
 	task->worker = NULL;
-	return croutine_scheduler_enqueue_main(scheduler, task);
+	if (croutine_scheduler_enqueue_main(scheduler, task) != 0)
+		return CROUTINE_TASK_ENQUEUE_ERROR;
+	return CROUTINE_TASK_ENQUEUE_MAIN;
 }
 
 int croutine_task_wake(struct croutine_task *task) {
-	struct croutine_main_event_source *source;
 	struct croutine_worker *worker;
 	struct croutine_scheduler *scheduler;
 	enum croutine_task_state expected;
+	enum croutine_task_enqueue_result enqueue_result;
+	size_t index;
 
 	if (task == NULL || task->scheduler == NULL)
 		return -1;
@@ -126,18 +129,18 @@ int croutine_task_wake(struct croutine_task *task) {
 			return -1;
 	}
 
-	if (croutine_task_enqueue(task) != 0)
+	enqueue_result = croutine_task_enqueue(task);
+	if (enqueue_result == CROUTINE_TASK_ENQUEUE_ERROR)
 		abort();
 
-	if (worker != NULL && task->worker == worker) {
-		source = worker->main_event_source;
-		if (worker != croutine_current_worker && source != NULL &&
-			source->wake != NULL)
-			(void)source->wake(source);
+	if (enqueue_result == CROUTINE_TASK_ENQUEUE_LOCAL) {
+		if (worker != croutine_current_worker)
+			croutine_worker_wake(worker);
 		return 0;
 	}
 
-	croutine_scheduler_wake_all(scheduler);
+	for (index = 0; index < scheduler->worker_count; index++)
+		croutine_worker_wake(&scheduler->workers[index]);
 	return 0;
 }
 

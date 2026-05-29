@@ -42,9 +42,19 @@ enum croutine_worker_start_state {
 	CROUTINE_WORKER_STARTED,
 };
 
-enum croutine_worker_quiescent_state {
-	CROUTINE_WORKER_ACTIVE = 0,
-	CROUTINE_WORKER_QUIESCENT,
+enum croutine_worker_state {
+	CROUTINE_WORKER_RUNNING = 0,
+	CROUTINE_WORKER_SOURCE_WAITING,
+	CROUTINE_WORKER_SUSPENDING,
+	CROUTINE_WORKER_SUSPENDED,
+	CROUTINE_WORKER_EXITING,
+	CROUTINE_WORKER_EXITED,
+};
+
+enum croutine_task_enqueue_result {
+	CROUTINE_TASK_ENQUEUE_LOCAL = 0,
+	CROUTINE_TASK_ENQUEUE_MAIN,
+	CROUTINE_TASK_ENQUEUE_ERROR,
 };
 
 enum croutine_task_result_policy {
@@ -89,7 +99,7 @@ struct croutine_worker {
 	struct croutine_scheduler *scheduler;
 	pthread_t tid;
 	enum croutine_worker_start_state start_state;
-	enum croutine_worker_quiescent_state quiescent_state;
+	_Atomic enum croutine_worker_state state;
 
 	croutine_schedule schedule;
 
@@ -100,12 +110,12 @@ struct croutine_worker {
 
 	struct croutine_main_event_source *main_event_source;
 	size_t local_turns;
+	size_t reported_suspend_epoch;
 };
 
 struct croutine_scheduler {
 	struct croutine_worker *workers;
 	size_t worker_count;
-	size_t next_worker;
 
 	pthread_mutex_t state_lock;
 	pthread_cond_t state_cond;
@@ -119,8 +129,9 @@ struct croutine_scheduler {
 
 	croutine_list_head event_sources;
 
-	_Atomic uint32_t state;
-	_Atomic uint32_t quiescent_workers;
+	_Atomic enum croutine_scheduler_state state;
+	size_t suspended_workers;
+	size_t suspend_epoch;
 
 	struct croutine_config config;
 };

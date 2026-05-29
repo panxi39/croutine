@@ -11,5 +11,8 @@ void croutine_worker_destroy(struct croutine_worker *worker);
 void croutine_worker_schedule(void);
 int croutine_worker_enqueue_local(struct croutine_worker *worker,
 								  struct croutine_task *task);
+void croutine_worker_request_suspend(struct croutine_worker *worker);
+void croutine_worker_wake(struct croutine_worker *worker);
+void croutine_worker_request_exit(struct croutine_worker *worker);
 
 #endif

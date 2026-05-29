@@ -7,53 +7,15 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 
-static struct croutine_task *
-croutine_worker_pop_local(struct croutine_worker *worker) {
-	void *item;
+static void croutine_worker_source_wake(struct croutine_worker *worker) {
+	struct croutine_main_event_source *source;
 
 	if (worker == NULL)
-		return NULL;
-
-	pthread_mutex_lock(&worker->local_queue_lock);
-	if (croutine_queue_pop(&worker->local_queue, &item) != 0)
-		item = NULL;
-	pthread_mutex_unlock(&worker->local_queue_lock);
-
-	return item;
-}
-
-static void croutine_worker_process_current(struct croutine_worker *worker) {
-	struct croutine_task *task;
-	enum croutine_task_state state;
-
-	task = croutine_current_task;
-	if (task == NULL)
 		return;
 
-	croutine_current_task = NULL;
-	state = atomic_load_explicit(&task->state, memory_order_acquire);
-
-	if (state == CROUTINE_TASK_FINISHED) {
-		switch (task->result_policy) {
-		case CROUTINE_TASK_RESULT_COLLECT:
-			croutine_scheduler_add_finished(worker->scheduler, task);
-			break;
-		case CROUTINE_TASK_RESULT_DETACHED:
-			if (!croutine_list_empty(&task->state_node))
-				abort();
-			croutine_list_push_back(&worker->dead_tasks, &task->state_node);
-			break;
-		default:
-			abort();
-		}
-		return;
-	}
-
-	if (state == CROUTINE_TASK_READY) {
-		if (croutine_task_enqueue(task) != 0)
-			abort();
-		return;
-	}
+	source = worker->main_event_source;
+	if (source != NULL && source->wake != NULL)
+		(void)source->wake(source);
 }
 
 static void croutine_worker_reclaim_dead(struct croutine_worker *worker) {
@@ -69,97 +31,36 @@ static void croutine_worker_reclaim_dead(struct croutine_worker *worker) {
 	}
 }
 
-static struct croutine_task *
-croutine_worker_next_task(struct croutine_worker *worker) {
+static void croutine_worker_report_suspended(struct croutine_worker *worker) {
 	struct croutine_scheduler *scheduler;
-	struct croutine_task *task;
-	size_t quota;
+	enum croutine_scheduler_state state;
+
+	if (worker == NULL || worker->scheduler == NULL)
+		return;
 
 	scheduler = worker->scheduler;
-	quota = scheduler->config.main_queue_quota;
-	if (quota == 0)
-		quota = 1;
-
-	if (worker->local_turns >= quota) {
-		task = croutine_scheduler_pop_main(worker);
-		worker->local_turns = 0;
-		if (task != NULL)
-			return task;
+	pthread_mutex_lock(&scheduler->state_lock);
+	state = atomic_load_explicit(&scheduler->state, memory_order_acquire);
+	if ((state == CROUTINE_SCHEDULER_STOPPING ||
+		 state == CROUTINE_SCHEDULER_STOPPED) &&
+		worker->reported_suspend_epoch != scheduler->suspend_epoch) {
+		worker->reported_suspend_epoch = scheduler->suspend_epoch;
+		scheduler->suspended_workers++;
+		if (scheduler->suspended_workers >= scheduler->worker_count)
+			pthread_cond_broadcast(&scheduler->state_cond);
 	}
-
-	task = croutine_worker_pop_local(worker);
-	if (task != NULL) {
-		worker->local_turns++;
-		return task;
-	}
-
-	task = croutine_scheduler_pop_main(worker);
-	if (task != NULL)
-		worker->local_turns = 0;
-	return task;
-}
-
-static void croutine_worker_wait(struct croutine_worker *worker) {
-	struct croutine_main_event_source *source;
-
-	source = worker->main_event_source;
-	if (source != NULL && source->blocking_wait != NULL)
-		source->blocking_wait(source);
-}
-
-static void croutine_worker_suspend(struct croutine_worker *worker) {
-	struct croutine_main_event_source *source;
-
-	source = worker->main_event_source;
-	if (source != NULL && source->suspend != NULL)
-		source->suspend(source);
+	pthread_mutex_unlock(&scheduler->state_lock);
 }
 
 static void croutine_worker_exit_thread(struct croutine_worker *worker) {
-	(void)worker;
+	if (worker != NULL)
+		atomic_store_explicit(&worker->state, CROUTINE_WORKER_EXITED,
+							  memory_order_release);
 
 	croutine_current_task = NULL;
 	croutine_current_worker = NULL;
 	croutine_sched = NULL;
 	pthread_exit(NULL);
-}
-
-static void croutine_worker_exit_if_destroying(struct croutine_worker *worker) {
-	if (croutine_scheduler_is_destroying(worker->scheduler))
-		croutine_worker_exit_thread(worker);
-}
-
-static void croutine_worker_collect(struct croutine_worker *worker) {
-	struct croutine_main_event_source *source;
-
-	source = worker->main_event_source;
-	if (source != NULL && source->collect != NULL)
-		source->collect(source);
-}
-
-static void croutine_worker_wait_while_stopping(struct croutine_worker *worker) {
-	while (croutine_scheduler_is_stopping(worker->scheduler)) {
-		croutine_scheduler_worker_quiescent(worker);
-		croutine_worker_suspend(worker);
-		croutine_worker_exit_if_destroying(worker);
-	}
-}
-
-static struct croutine_task *
-croutine_worker_select_next_task(struct croutine_worker *worker) {
-	for (;;) {
-		struct croutine_task *task;
-
-		croutine_worker_exit_if_destroying(worker);
-		croutine_worker_wait_while_stopping(worker);
-		croutine_worker_collect(worker);
-
-		task = croutine_worker_next_task(worker);
-		if (task != NULL)
-			return task;
-
-		croutine_worker_wait(worker);
-	}
 }
 
 static void *croutine_worker_main(void *arg) {
@@ -180,7 +81,7 @@ int croutine_worker_init(struct croutine_worker *worker,
 
 	worker->scheduler = scheduler;
 	worker->start_state = CROUTINE_WORKER_STOPPED;
-	worker->quiescent_state = CROUTINE_WORKER_ACTIVE;
+	atomic_init(&worker->state, CROUTINE_WORKER_RUNNING);
 	worker->schedule = croutine_worker_schedule;
 	if (pthread_mutex_init(&worker->local_queue_lock, NULL) != 0)
 		return -1;
@@ -195,6 +96,7 @@ int croutine_worker_init(struct croutine_worker *worker,
 	croutine_list_init(&worker->dead_tasks);
 	worker->main_event_source = NULL;
 	worker->local_turns = 0;
+	worker->reported_suspend_epoch = 0;
 	return 0;
 }
 
@@ -202,6 +104,8 @@ int croutine_worker_start(struct croutine_worker *worker) {
 	if (worker == NULL || worker->start_state == CROUTINE_WORKER_STARTED)
 		return -1;
 
+	atomic_store_explicit(&worker->state, CROUTINE_WORKER_RUNNING,
+						  memory_order_release);
 	if (pthread_create(&worker->tid, NULL, croutine_worker_main, worker) != 0)
 		return -1;
 
@@ -246,16 +150,289 @@ int croutine_worker_enqueue_local(struct croutine_worker *worker,
 	return ret;
 }
 
+void croutine_worker_request_suspend(struct croutine_worker *worker) {
+	enum croutine_worker_state state;
+	enum croutine_worker_state expected;
+
+	if (worker == NULL)
+		return;
+
+	for (;;) {
+		state = atomic_load_explicit(&worker->state, memory_order_acquire);
+		switch (state) {
+		case CROUTINE_WORKER_RUNNING:
+			expected = CROUTINE_WORKER_RUNNING;
+			if (atomic_compare_exchange_weak_explicit(
+					&worker->state, &expected, CROUTINE_WORKER_SUSPENDING,
+					memory_order_acq_rel, memory_order_acquire))
+				return;
+			break;
+		case CROUTINE_WORKER_SOURCE_WAITING:
+			expected = CROUTINE_WORKER_SOURCE_WAITING;
+			if (atomic_compare_exchange_weak_explicit(
+					&worker->state, &expected, CROUTINE_WORKER_SUSPENDING,
+					memory_order_acq_rel, memory_order_acquire)) {
+				croutine_worker_source_wake(worker);
+				return;
+			}
+			break;
+		case CROUTINE_WORKER_SUSPENDED:
+			croutine_worker_report_suspended(worker);
+			return;
+		case CROUTINE_WORKER_SUSPENDING:
+		case CROUTINE_WORKER_EXITING:
+		case CROUTINE_WORKER_EXITED:
+			return;
+		default:
+			abort();
+		}
+	}
+}
+
+void croutine_worker_wake(struct croutine_worker *worker) {
+	enum croutine_worker_state state;
+	enum croutine_worker_state expected;
+
+	if (worker == NULL)
+		return;
+
+	for (;;) {
+		state = atomic_load_explicit(&worker->state, memory_order_acquire);
+		switch (state) {
+		case CROUTINE_WORKER_SOURCE_WAITING:
+		case CROUTINE_WORKER_SUSPENDING:
+		case CROUTINE_WORKER_SUSPENDED:
+			expected = state;
+			if (atomic_compare_exchange_weak_explicit(
+					&worker->state, &expected, CROUTINE_WORKER_RUNNING,
+					memory_order_acq_rel, memory_order_acquire)) {
+				croutine_worker_source_wake(worker);
+				return;
+			}
+			break;
+		case CROUTINE_WORKER_RUNNING:
+		case CROUTINE_WORKER_EXITING:
+		case CROUTINE_WORKER_EXITED:
+			return;
+		default:
+			abort();
+		}
+	}
+}
+
+void croutine_worker_request_exit(struct croutine_worker *worker) {
+	enum croutine_worker_state state;
+	enum croutine_worker_state expected;
+
+	if (worker == NULL)
+		return;
+
+	for (;;) {
+		state = atomic_load_explicit(&worker->state, memory_order_acquire);
+		switch (state) {
+		case CROUTINE_WORKER_RUNNING:
+			expected = CROUTINE_WORKER_RUNNING;
+			if (atomic_compare_exchange_weak_explicit(
+					&worker->state, &expected, CROUTINE_WORKER_EXITING,
+					memory_order_acq_rel, memory_order_acquire))
+				return;
+			break;
+		case CROUTINE_WORKER_SOURCE_WAITING:
+		case CROUTINE_WORKER_SUSPENDING:
+		case CROUTINE_WORKER_SUSPENDED:
+			expected = state;
+			if (atomic_compare_exchange_weak_explicit(
+					&worker->state, &expected, CROUTINE_WORKER_EXITING,
+					memory_order_acq_rel, memory_order_acquire)) {
+				croutine_worker_source_wake(worker);
+				return;
+			}
+			break;
+		case CROUTINE_WORKER_EXITING:
+		case CROUTINE_WORKER_EXITED:
+			return;
+		default:
+			abort();
+		}
+	}
+}
+
 void croutine_worker_schedule(void) {
 	struct croutine_worker *worker = croutine_current_worker;
 	struct croutine_task *task;
+	struct croutine_main_event_source *source;
+	void *item;
+	enum croutine_task_state task_state;
+	enum croutine_task_enqueue_result enqueue_result;
+	enum croutine_worker_state worker_state;
+	enum croutine_worker_state expected_worker_state;
+	enum croutine_scheduler_state scheduler_state;
+	enum croutine_main_event_wait_result wait_result;
+	size_t quota;
 
 	if (worker == NULL)
 		abort();
 
 	croutine_worker_reclaim_dead(worker);
-	croutine_worker_process_current(worker);
-	task = croutine_worker_select_next_task(worker);
-	croutine_task_resume(task);
-	abort();
+
+	task = croutine_current_task;
+	if (task != NULL) {
+		croutine_current_task = NULL;
+		task_state = atomic_load_explicit(&task->state, memory_order_acquire);
+
+		if (task_state == CROUTINE_TASK_FINISHED) {
+			switch (task->result_policy) {
+			case CROUTINE_TASK_RESULT_COLLECT:
+				croutine_scheduler_add_finished(worker->scheduler, task);
+				break;
+			case CROUTINE_TASK_RESULT_DETACHED:
+				if (!croutine_list_empty(&task->state_node))
+					abort();
+				croutine_list_push_back(&worker->dead_tasks, &task->state_node);
+				break;
+			default:
+				abort();
+			}
+		} else if (task_state == CROUTINE_TASK_READY) {
+			enqueue_result = croutine_task_enqueue(task);
+			if (enqueue_result == CROUTINE_TASK_ENQUEUE_ERROR)
+				abort();
+		}
+	}
+
+	for (;;) {
+		task = NULL;
+		worker_state =
+			atomic_load_explicit(&worker->state, memory_order_acquire);
+
+		switch (worker_state) {
+		case CROUTINE_WORKER_EXITING:
+		case CROUTINE_WORKER_EXITED:
+			croutine_worker_exit_thread(worker);
+			break;
+		case CROUTINE_WORKER_SUSPENDING:
+			expected_worker_state = CROUTINE_WORKER_SUSPENDING;
+			if (!atomic_compare_exchange_strong_explicit(
+					&worker->state, &expected_worker_state,
+					CROUTINE_WORKER_SUSPENDED, memory_order_acq_rel,
+					memory_order_acquire))
+				continue;
+			croutine_worker_report_suspended(worker);
+			source = worker->main_event_source;
+			if (source != NULL && source->suspend != NULL)
+				source->suspend(source);
+			continue;
+		case CROUTINE_WORKER_SUSPENDED:
+			croutine_worker_report_suspended(worker);
+			source = worker->main_event_source;
+			if (source != NULL && source->suspend != NULL)
+				source->suspend(source);
+			continue;
+		case CROUTINE_WORKER_SOURCE_WAITING:
+			expected_worker_state = CROUTINE_WORKER_SOURCE_WAITING;
+			(void)atomic_compare_exchange_strong_explicit(
+				&worker->state, &expected_worker_state, CROUTINE_WORKER_RUNNING,
+				memory_order_acq_rel, memory_order_acquire);
+			continue;
+		case CROUTINE_WORKER_RUNNING:
+			break;
+		default:
+			abort();
+		}
+
+		if (worker->scheduler == NULL)
+			scheduler_state = CROUTINE_SCHEDULER_DESTROYING;
+		else
+			scheduler_state = atomic_load_explicit(&worker->scheduler->state,
+												   memory_order_acquire);
+
+		if (scheduler_state == CROUTINE_SCHEDULER_DESTROYING) {
+			croutine_worker_request_exit(worker);
+			continue;
+		}
+		if (scheduler_state == CROUTINE_SCHEDULER_STOPPING ||
+			scheduler_state == CROUTINE_SCHEDULER_STOPPED) {
+			croutine_worker_request_suspend(worker);
+			continue;
+		}
+
+		source = worker->main_event_source;
+		if (source != NULL && source->collect != NULL)
+			source->collect(source);
+		if (atomic_load_explicit(&worker->state, memory_order_acquire) !=
+			CROUTINE_WORKER_RUNNING)
+			continue;
+
+		quota = worker->scheduler->config.main_queue_quota;
+		if (quota == 0)
+			quota = 1;
+
+		if (worker->local_turns >= quota) {
+			task = croutine_scheduler_pop_main(worker);
+			worker->local_turns = 0;
+		}
+
+		if (task == NULL) {
+			pthread_mutex_lock(&worker->local_queue_lock);
+			if (croutine_queue_pop(&worker->local_queue, &item) == 0)
+				task = item;
+			pthread_mutex_unlock(&worker->local_queue_lock);
+			if (task != NULL)
+				worker->local_turns++;
+		}
+
+		if (task == NULL) {
+			task = croutine_scheduler_pop_main(worker);
+			if (task != NULL)
+				worker->local_turns = 0;
+		}
+
+		if (task != NULL)
+			croutine_task_resume(task);
+
+		if (atomic_load_explicit(&worker->state, memory_order_acquire) !=
+			CROUTINE_WORKER_RUNNING)
+			continue;
+
+		expected_worker_state = CROUTINE_WORKER_RUNNING;
+		if (!atomic_compare_exchange_strong_explicit(
+				&worker->state, &expected_worker_state,
+				CROUTINE_WORKER_SOURCE_WAITING, memory_order_acq_rel,
+				memory_order_acquire))
+			continue;
+
+		source = worker->main_event_source;
+		if (source == NULL || source->blocking_wait == NULL) {
+			expected_worker_state = CROUTINE_WORKER_SOURCE_WAITING;
+			(void)atomic_compare_exchange_strong_explicit(
+				&worker->state, &expected_worker_state,
+				CROUTINE_WORKER_SUSPENDING, memory_order_acq_rel,
+				memory_order_acquire);
+			continue;
+		}
+
+		wait_result = source->blocking_wait(source);
+		switch (wait_result) {
+		case CROUTINE_MAIN_EVENT_WAIT_DONE:
+			expected_worker_state = CROUTINE_WORKER_SOURCE_WAITING;
+			(void)atomic_compare_exchange_strong_explicit(
+				&worker->state, &expected_worker_state, CROUTINE_WORKER_RUNNING,
+				memory_order_acq_rel, memory_order_acquire);
+			break;
+		case CROUTINE_MAIN_EVENT_WAIT_EMPTY:
+			expected_worker_state = CROUTINE_WORKER_SOURCE_WAITING;
+			(void)atomic_compare_exchange_strong_explicit(
+				&worker->state, &expected_worker_state,
+				CROUTINE_WORKER_SUSPENDING, memory_order_acq_rel,
+				memory_order_acquire);
+			break;
+		case CROUTINE_MAIN_EVENT_WAIT_ERROR:
+		default:
+			expected_worker_state = CROUTINE_WORKER_SOURCE_WAITING;
+			(void)atomic_compare_exchange_strong_explicit(
+				&worker->state, &expected_worker_state, CROUTINE_WORKER_RUNNING,
+				memory_order_acq_rel, memory_order_acquire);
+			abort();
+		}
+	}
 }
