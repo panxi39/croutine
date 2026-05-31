@@ -33,7 +33,6 @@ static int croutine_scheduler_normalize_config(struct croutine_config *out,
 		out->stack_size = CROUTINE_DEFAULT_STACK_SIZE;
 	if (out->local_queue_capacity == 0)
 		out->local_queue_capacity = CROUTINE_DEFAULT_LOCAL_QUEUE_CAPACITY;
-
 	if (out->workers == 0 || out->workers > UINT32_MAX ||
 		out->local_queue_capacity == 0 ||
 		out->local_queue_capacity > UINT32_MAX || out->stack_size < 64)
@@ -156,10 +155,39 @@ static void croutine_scheduler_cleanup(struct croutine_scheduler *scheduler) {
 	free(scheduler->workers);
 	croutine_queue_destroy(&scheduler->main_queue);
 	pthread_mutex_destroy(&scheduler->tasks_lock);
-	pthread_mutex_destroy(&scheduler->main_queue_lock);
 	pthread_cond_destroy(&scheduler->state_cond);
 	pthread_mutex_destroy(&scheduler->state_lock);
 	free(scheduler);
+}
+
+static void
+croutine_scheduler_wake_one_inactive(struct croutine_scheduler *scheduler) {
+	size_t worker_count;
+	size_t start;
+
+	if (scheduler == NULL || scheduler->workers == NULL)
+		return;
+
+	worker_count = scheduler->worker_count;
+	if (worker_count == 0)
+		return;
+
+	start = atomic_fetch_add_explicit(&scheduler->wake_index, 1,
+									  memory_order_relaxed) %
+			worker_count;
+	for (size_t step = 0; step < worker_count; step++) {
+		struct croutine_worker *worker =
+			&scheduler->workers[(start + step) % worker_count];
+		enum croutine_worker_state state =
+			atomic_load_explicit(&worker->state, memory_order_acquire);
+
+		if (state == CROUTINE_WORKER_SOURCE_WAITING ||
+			state == CROUTINE_WORKER_SUSPENDING ||
+			state == CROUTINE_WORKER_SUSPENDED) {
+			croutine_worker_wake(worker);
+			return;
+		}
+	}
 }
 
 int croutine_scheduler_enqueue_main(struct croutine_scheduler *scheduler,
@@ -169,9 +197,13 @@ int croutine_scheduler_enqueue_main(struct croutine_scheduler *scheduler,
 	if (scheduler == NULL || task == NULL)
 		return -1;
 
-	pthread_mutex_lock(&scheduler->main_queue_lock);
 	ret = croutine_queue_push(&scheduler->main_queue, task);
-	pthread_mutex_unlock(&scheduler->main_queue_lock);
+	if (ret == 0 &&
+		atomic_load_explicit(&scheduler->state, memory_order_acquire) ==
+			CROUTINE_SCHEDULER_RUNNING &&
+		atomic_load_explicit(&scheduler->searching_workers,
+							 memory_order_acquire) == 0)
+		croutine_scheduler_wake_one_inactive(scheduler);
 	return ret;
 }
 
@@ -185,13 +217,16 @@ croutine_scheduler_pop_main(struct croutine_worker *worker) {
 		return NULL;
 
 	scheduler = worker->scheduler;
-	pthread_mutex_lock(&scheduler->main_queue_lock);
-	if (croutine_queue_pop(&scheduler->main_queue, &item) == 0)
+	if (croutine_queue_pop(&scheduler->main_queue, &item) == 0) {
 		task = item;
-	pthread_mutex_unlock(&scheduler->main_queue_lock);
-
-	if (task != NULL)
+		if (atomic_load_explicit(&task->schedulable, memory_order_acquire) ==
+			0) {
+			if (croutine_queue_push(&scheduler->main_queue, task) != 0)
+				abort();
+			return NULL;
+		}
 		task->worker = worker;
+	}
 
 	return task;
 }
@@ -220,18 +255,18 @@ int croutine_scheduler_create(croutine_scheduler **out,
 	atomic_init(&scheduler->state, CROUTINE_SCHEDULER_INIT);
 	scheduler->suspended_workers = 0;
 	scheduler->suspend_epoch = 0;
+	atomic_init(&scheduler->searching_workers, 0);
+	atomic_init(&scheduler->steal_index, 0);
+	atomic_init(&scheduler->wake_index, 0);
 	croutine_list_init(&scheduler->tasks);
 	croutine_list_init(&scheduler->finished_tasks);
-	croutine_list_init(&scheduler->event_sources);
 
 	if (pthread_mutex_init(&scheduler->state_lock, NULL) != 0)
 		goto fail_free;
 	if (pthread_cond_init(&scheduler->state_cond, NULL) != 0)
 		goto fail_state_lock;
-	if (pthread_mutex_init(&scheduler->main_queue_lock, NULL) != 0)
-		goto fail_state_cond;
 	if (pthread_mutex_init(&scheduler->tasks_lock, NULL) != 0)
-		goto fail_main_queue_lock;
+		goto fail_state_cond;
 	if (croutine_queue_init(&scheduler->main_queue, main_queue_capacity) != 0)
 		goto fail_tasks_lock;
 
@@ -270,8 +305,6 @@ fail_main_queue:
 	croutine_queue_destroy(&scheduler->main_queue);
 fail_tasks_lock:
 	pthread_mutex_destroy(&scheduler->tasks_lock);
-fail_main_queue_lock:
-	pthread_mutex_destroy(&scheduler->main_queue_lock);
 fail_state_cond:
 	pthread_cond_destroy(&scheduler->state_cond);
 fail_state_lock:
@@ -465,6 +498,8 @@ int croutine_spawn(croutine_scheduler *scheduler, croutine_task_fn func,
 		pthread_mutex_unlock(&scheduler->tasks_lock);
 		goto fail_alloc;
 	}
+	if (croutine_current_worker != NULL && croutine_sched == scheduler)
+		task->worker = croutine_current_worker;
 	pthread_mutex_unlock(&scheduler->tasks_lock);
 
 	if (croutine_task_wake(task) != 0)

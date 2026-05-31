@@ -22,6 +22,7 @@ enum croutine_task_state {
 	CROUTINE_TASK_PENDING = 0,
 	CROUTINE_TASK_READY,
 	CROUTINE_TASK_RUNNING,
+	CROUTINE_TASK_YIELDING,
 	CROUTINE_TASK_WAITING,
 	CROUTINE_TASK_FINISHED,
 };
@@ -44,6 +45,7 @@ enum croutine_worker_start_state {
 
 enum croutine_worker_state {
 	CROUTINE_WORKER_RUNNING = 0,
+	CROUTINE_WORKER_SEARCHING,
 	CROUTINE_WORKER_SOURCE_WAITING,
 	CROUTINE_WORKER_SUSPENDING,
 	CROUTINE_WORKER_SUSPENDED,
@@ -83,6 +85,7 @@ struct croutine_task {
 	void *arg, *result;
 	enum croutine_task_result_policy result_policy;
 	_Atomic enum croutine_task_state state;
+	_Atomic int schedulable;
 };
 
 struct croutine_wait_handle {
@@ -103,13 +106,12 @@ struct croutine_worker {
 
 	croutine_schedule schedule;
 
-	pthread_mutex_t local_queue_lock;
-	int local_queue_lock_initialized;
 	croutine_queue local_queue;
-	croutine_list_head dead_tasks;
+	struct croutine_stack *scheduler_stack;
+	struct croutine_arch_context scheduler_context;
+	size_t local_turns;
 
 	struct croutine_main_event_source *main_event_source;
-	size_t local_turns;
 	size_t reported_suspend_epoch;
 };
 
@@ -120,18 +122,19 @@ struct croutine_scheduler {
 	pthread_mutex_t state_lock;
 	pthread_cond_t state_cond;
 
-	pthread_mutex_t main_queue_lock;
 	croutine_queue main_queue;
 
 	pthread_mutex_t tasks_lock;
 	croutine_list_head tasks;
 	croutine_list_head finished_tasks;
 
-	croutine_list_head event_sources;
-
 	_Atomic enum croutine_scheduler_state state;
 	size_t suspended_workers;
 	size_t suspend_epoch;
+
+	_Atomic size_t searching_workers;
+	_Atomic size_t steal_index;
+	_Atomic size_t wake_index;
 
 	struct croutine_config config;
 };

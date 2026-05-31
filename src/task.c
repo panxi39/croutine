@@ -42,6 +42,7 @@ int croutine_task_init(struct croutine_task *task,
 	task->result = NULL;
 	task->result_policy = CROUTINE_TASK_RESULT_DETACHED;
 	atomic_init(&task->state, CROUTINE_TASK_PENDING);
+	atomic_init(&task->schedulable, 1);
 
 	if (croutine_arch_context_init(&task->context, task->stack->bottom,
 								   task->stack->size,
@@ -60,6 +61,7 @@ void croutine_task_init_current(struct croutine_task *task) {
 		return;
 	}
 
+	atomic_store_explicit(&task->schedulable, 0, memory_order_release);
 	atomic_store_explicit(&task->state, CROUTINE_TASK_RUNNING,
 						  memory_order_release);
 	croutine_current_task = task;
@@ -80,6 +82,7 @@ void croutine_task_resume(struct croutine_task *task) {
 
 	croutine_current_worker = task->worker;
 	croutine_current_task = task;
+	atomic_store_explicit(&task->schedulable, 0, memory_order_release);
 	atomic_store_explicit(&task->state, CROUTINE_TASK_RUNNING,
 						  memory_order_release);
 
@@ -90,6 +93,7 @@ void croutine_task_resume(struct croutine_task *task) {
 enum croutine_task_enqueue_result
 croutine_task_enqueue(struct croutine_task *task) {
 	struct croutine_worker *worker;
+	struct croutine_worker *current_worker;
 	struct croutine_scheduler *scheduler;
 
 	if (task == NULL || task->scheduler == NULL)
@@ -97,27 +101,25 @@ croutine_task_enqueue(struct croutine_task *task) {
 
 	scheduler = task->scheduler;
 	worker = task->worker;
-	if (worker != NULL && croutine_worker_enqueue_local(worker, task) == 0)
+	current_worker = croutine_current_worker;
+	if (atomic_load_explicit(&task->schedulable, memory_order_acquire) != 0 &&
+		worker != NULL && worker == current_worker &&
+		croutine_worker_enqueue_local(worker, task) == 0)
 		return CROUTINE_TASK_ENQUEUE_LOCAL;
 
-	task->worker = NULL;
+	if (atomic_load_explicit(&task->schedulable, memory_order_acquire) != 0)
+		task->worker = NULL;
 	if (croutine_scheduler_enqueue_main(scheduler, task) != 0)
 		return CROUTINE_TASK_ENQUEUE_ERROR;
 	return CROUTINE_TASK_ENQUEUE_MAIN;
 }
 
 int croutine_task_wake(struct croutine_task *task) {
-	struct croutine_worker *worker;
-	struct croutine_scheduler *scheduler;
 	enum croutine_task_state expected;
-	enum croutine_task_enqueue_result enqueue_result;
-	size_t index;
 
 	if (task == NULL || task->scheduler == NULL)
 		return -1;
 
-	scheduler = task->scheduler;
-	worker = task->worker;
 	expected = CROUTINE_TASK_PENDING;
 	if (!atomic_compare_exchange_strong_explicit(
 			&task->state, &expected, CROUTINE_TASK_READY, memory_order_acq_rel,
@@ -129,29 +131,60 @@ int croutine_task_wake(struct croutine_task *task) {
 			return -1;
 	}
 
-	enqueue_result = croutine_task_enqueue(task);
-	if (enqueue_result == CROUTINE_TASK_ENQUEUE_ERROR)
+	if (croutine_task_enqueue(task) == CROUTINE_TASK_ENQUEUE_ERROR)
 		abort();
 
-	if (enqueue_result == CROUTINE_TASK_ENQUEUE_LOCAL) {
-		if (worker != croutine_current_worker)
-			croutine_worker_wake(worker);
-		return 0;
-	}
+	return 0;
+}
 
-	for (index = 0; index < scheduler->worker_count; index++)
-		croutine_worker_wake(&scheduler->workers[index]);
+int croutine_task_prepare_wait(void) {
+	struct croutine_task *task = croutine_current_task;
+	enum croutine_task_state expected;
+
+	if (task == NULL)
+		return -1;
+
+	expected = CROUTINE_TASK_RUNNING;
+	if (!atomic_compare_exchange_strong_explicit(
+			&task->state, &expected, CROUTINE_TASK_WAITING,
+			memory_order_acq_rel, memory_order_acquire))
+		return -1;
+
+	return 0;
+}
+
+int croutine_task_cancel_wait(void) {
+	struct croutine_task *task = croutine_current_task;
+	enum croutine_task_state expected;
+
+	if (task == NULL)
+		return -1;
+
+	expected = CROUTINE_TASK_WAITING;
+	if (!atomic_compare_exchange_strong_explicit(
+			&task->state, &expected, CROUTINE_TASK_RUNNING,
+			memory_order_acq_rel, memory_order_acquire))
+		return -1;
+
 	return 0;
 }
 
 void croutine_task_wait(void) {
 	struct croutine_task *task = croutine_current_task;
+	enum croutine_task_state expected;
+	enum croutine_task_state state;
 
 	if (task == NULL)
 		abort();
 
-	atomic_store_explicit(&task->state, CROUTINE_TASK_WAITING,
-						  memory_order_release);
+	expected = CROUTINE_TASK_RUNNING;
+	(void)atomic_compare_exchange_strong_explicit(
+		&task->state, &expected, CROUTINE_TASK_WAITING, memory_order_acq_rel,
+		memory_order_acquire);
+	state = atomic_load_explicit(&task->state, memory_order_acquire);
+	if (state != CROUTINE_TASK_WAITING && state != CROUTINE_TASK_READY)
+		abort();
+
 	croutine_task_enter_scheduler();
 }
 
@@ -161,7 +194,7 @@ void croutine_yield(void) {
 	if (task == NULL)
 		abort();
 
-	atomic_store_explicit(&task->state, CROUTINE_TASK_READY,
+	atomic_store_explicit(&task->state, CROUTINE_TASK_YIELDING,
 						  memory_order_release);
 	croutine_task_enter_scheduler();
 }

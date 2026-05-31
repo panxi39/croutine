@@ -44,6 +44,9 @@ croutine_scheduler *croutine_scheduler_current(void);
 int croutine_spawn(croutine_scheduler *scheduler, croutine_task_fn func,
 				   void *arg);
 
+int croutine_task_prepare_wait(void);
+int croutine_task_cancel_wait(void);
+void croutine_task_wait(void);
 void croutine_yield(void);
 croutine_task *croutine_task_current(void);
 

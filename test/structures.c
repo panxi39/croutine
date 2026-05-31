@@ -128,8 +128,36 @@ static int test_queue(void) {
 	CHECK(croutine_queue_empty(&queue), "reset should empty queue");
 
 	croutine_queue_destroy(&queue);
-	CHECK(queue.buffer == NULL, "destroy should clear queue buffer");
+	CHECK(queue.cells == NULL, "destroy should clear queue cells");
 	CHECK(queue.capacity == 0, "destroy should clear queue capacity");
+
+	CHECK(croutine_queue_init(&queue, 6) == 0,
+		  "victim queue init should succeed");
+	struct croutine_queue target;
+	CHECK(croutine_queue_init(&target, 6) == 0,
+		  "target queue init should succeed");
+	CHECK(croutine_queue_push_owner(&queue, &a) == 0,
+		  "owner push a should succeed");
+	CHECK(croutine_queue_push_owner(&queue, &b) == 0,
+		  "owner push b should succeed");
+	CHECK(croutine_queue_push_owner(&queue, &c) == 0,
+		  "owner push c should succeed");
+	CHECK(croutine_queue_push_owner(&queue, &d) == 0,
+		  "owner push d should succeed");
+	CHECK(croutine_queue_steal_half(&queue, &target, &item) == 2,
+		  "steal half of four items should steal two");
+	CHECK(item == &b, "steal should return newest item in stolen batch");
+	CHECK(croutine_queue_pop(&target, &item) == 0,
+		  "target should contain remaining stolen item");
+	CHECK(item == &a, "target should contain oldest stolen item");
+	CHECK(croutine_queue_pop(&queue, &item) == 0,
+		  "victim should retain first un-stolen item");
+	CHECK(item == &c, "victim first remaining item should be c");
+	CHECK(croutine_queue_pop(&queue, &item) == 0,
+		  "victim should retain second un-stolen item");
+	CHECK(item == &d, "victim second remaining item should be d");
+	croutine_queue_destroy(&target);
+	croutine_queue_destroy(&queue);
 
 	return 0;
 }
