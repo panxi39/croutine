@@ -1,4 +1,3 @@
-#include "croutine_event.h"
 #include "scheduler.h"
 #include "stack.h"
 #include "task.h"
@@ -137,7 +136,7 @@ int croutine_task_wake(struct croutine_task *task) {
 	return 0;
 }
 
-int croutine_task_prepare_wait(void) {
+int croutine_await(void) {
 	struct croutine_task *task = croutine_current_task;
 	enum croutine_task_state expected;
 
@@ -153,7 +152,7 @@ int croutine_task_prepare_wait(void) {
 	return 0;
 }
 
-int croutine_task_cancel_wait(void) {
+int croutine_cancel_await(void) {
 	struct croutine_task *task = croutine_current_task;
 	enum croutine_task_state expected;
 
@@ -169,33 +168,18 @@ int croutine_task_cancel_wait(void) {
 	return 0;
 }
 
-void croutine_task_wait(void) {
+void croutine_yield(void) {
 	struct croutine_task *task = croutine_current_task;
-	enum croutine_task_state expected;
 	enum croutine_task_state state;
 
 	if (task == NULL)
 		abort();
 
-	expected = CROUTINE_TASK_RUNNING;
-	(void)atomic_compare_exchange_strong_explicit(
-		&task->state, &expected, CROUTINE_TASK_WAITING, memory_order_acq_rel,
-		memory_order_acquire);
 	state = atomic_load_explicit(&task->state, memory_order_acquire);
-	if (state != CROUTINE_TASK_WAITING && state != CROUTINE_TASK_READY)
+	if (state != CROUTINE_TASK_RUNNING && state != CROUTINE_TASK_WAITING &&
+		state != CROUTINE_TASK_READY)
 		abort();
 
-	croutine_task_enter_scheduler();
-}
-
-void croutine_yield(void) {
-	struct croutine_task *task = croutine_current_task;
-
-	if (task == NULL)
-		abort();
-
-	atomic_store_explicit(&task->state, CROUTINE_TASK_YIELDING,
-						  memory_order_release);
 	croutine_task_enter_scheduler();
 }
 

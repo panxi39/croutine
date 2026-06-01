@@ -872,7 +872,7 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 		return -1;
 	}
 
-	if (croutine_task_prepare_wait() != 0) {
+	if (croutine_await() != 0) {
 		timer_wait_free(wait);
 		return -1;
 	}
@@ -880,7 +880,7 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 	log_event("task %zu wait %zu TIMER %.2fms on timer %zu", task->id, wait_no,
 			  (double)delay_microseconds / 1000.0, timer->id);
 	if (timer_source_add_wait(timer, wait) != 0) {
-		(void)croutine_task_cancel_wait();
+		(void)croutine_cancel_await();
 		timer_wait_free(wait);
 		return -1;
 	}
@@ -888,7 +888,7 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 	task->timer_waits++;
 	atomic_fetch_add_explicit(&task->runtime->waits_started, 1,
 							  memory_order_acq_rel);
-	croutine_task_wait();
+	croutine_yield();
 
 	clock_gettime(CLOCK_REALTIME, &now);
 	if (timespec_cmp(&now, &wait->deadline) < 0) {
@@ -951,7 +951,7 @@ static int runtime_external_wait(struct runtime_task_arg *task,
 		return -1;
 	}
 
-	if (croutine_task_prepare_wait() != 0) {
+	if (croutine_await() != 0) {
 		(void)external_wait_put(wait);
 		(void)external_wait_put(wait);
 		return -1;
@@ -960,7 +960,7 @@ static int runtime_external_wait(struct runtime_task_arg *task,
 	log_event("task %zu wait %zu EXTERNAL %.2fms", task->id, wait_no,
 			  (double)delay_microseconds / 1000.0);
 	if (external_source_add_wait(task->external, wait) != 0) {
-		(void)croutine_task_cancel_wait();
+		(void)croutine_cancel_await();
 		(void)external_wait_put(wait);
 		(void)external_wait_put(wait);
 		return -1;
@@ -969,7 +969,7 @@ static int runtime_external_wait(struct runtime_task_arg *task,
 	task->external_waits++;
 	atomic_fetch_add_explicit(&task->runtime->waits_started, 1,
 							  memory_order_acq_rel);
-	croutine_task_wait();
+	croutine_yield();
 
 	clock_gettime(CLOCK_REALTIME, &now);
 	if (timespec_cmp(&now, &wait->deadline) < 0) {

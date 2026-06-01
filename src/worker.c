@@ -284,7 +284,7 @@ static void croutine_worker_process_current(struct croutine_worker *worker) {
 			abort();
 		}
 		break;
-	case CROUTINE_TASK_YIELDING:
+	case CROUTINE_TASK_RUNNING:
 		atomic_store_explicit(&task->state, CROUTINE_TASK_READY,
 							  memory_order_release);
 		atomic_store_explicit(&task->schedulable, 1, memory_order_release);
@@ -297,7 +297,6 @@ static void croutine_worker_process_current(struct croutine_worker *worker) {
 		atomic_store_explicit(&task->schedulable, 1, memory_order_release);
 		break;
 	case CROUTINE_TASK_PENDING:
-	case CROUTINE_TASK_RUNNING:
 	default:
 		abort();
 	}
