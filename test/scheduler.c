@@ -28,7 +28,7 @@ struct test_task {
 
 struct run {
 	struct croutine_arch_context root;
-	struct croutine_queue queue;
+	croutine_mpmc_queue *queue;
 	struct test_task *tasks;
 	size_t task_count;
 	size_t repeat;
@@ -126,13 +126,13 @@ static void schedule(void) {
 		if (current->state == CROUTINE_TASK_FINISHED) {
 			active_run->finished++;
 		} else if (!active_run->failed &&
-				   croutine_queue_push(&active_run->queue, task) != 0) {
+				   croutine_mpmc_queue_push(active_run->queue, task) != 1) {
 			fail("run queue is full");
 		}
 	}
 
 	if (!active_run->failed &&
-		croutine_queue_pop(&active_run->queue, &item) == 0) {
+		(item = croutine_mpmc_queue_pop(active_run->queue)) != NULL) {
 		struct test_task *task = item;
 
 		croutine_task_init_current(&task->task);
@@ -143,6 +143,14 @@ static void schedule(void) {
 	croutine_arch_resume_and_ret(&active_run->root);
 }
 
+static size_t next_power_of_two(size_t value) {
+	size_t capacity = 2;
+
+	while (capacity < value)
+		capacity <<= 1;
+	return capacity;
+}
+
 static int init_run(struct run *run, struct config *config) {
 	size_t index;
 
@@ -151,7 +159,9 @@ static int init_run(struct run *run, struct config *config) {
 	run->repeat = config->repeat;
 	run->seed = (uint32_t)time(NULL);
 
-	if (croutine_queue_init(&run->queue, (uint32_t)run->task_count) != 0)
+	run->queue =
+		croutine_mpmc_queue_init((uint32_t)next_power_of_two(run->task_count));
+	if (run->queue == NULL)
 		return -1;
 
 	for (index = 0; index < run->task_count; index++) {
@@ -171,7 +181,7 @@ static int init_run(struct run *run, struct config *config) {
 				(croutine_arch_entry)task_call_entry) != 0)
 			return -1;
 
-		if (croutine_queue_push(&run->queue, test_task) != 0)
+		if (croutine_mpmc_queue_push(run->queue, test_task) != 1)
 			return -1;
 	}
 
@@ -204,14 +214,14 @@ static void *thread_main(void *arg) {
 
 	if (init_run(&run, config) != 0) {
 		config->status = 1;
-		croutine_queue_destroy(&run.queue);
+		croutine_mpmc_queue_destroy(run.queue);
 		return NULL;
 	}
 
 	croutine_arch_store_and_call(&run.root, schedule);
 
 	config->status = verify_run(&run) == 0 ? 0 : 1;
-	croutine_queue_destroy(&run.queue);
+	croutine_mpmc_queue_destroy(run.queue);
 	active_run = NULL;
 	croutine_task_init_current(NULL);
 	return NULL;

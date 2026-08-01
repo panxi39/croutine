@@ -30,7 +30,7 @@ int croutine_task_init(struct croutine_task *task,
 
 	memset(task, 0, sizeof(*task));
 	task->scheduler = scheduler;
-	task->worker = NULL;
+	atomic_init(&task->worker, NULL);
 	croutine_list_init(&task->scheduler_node);
 	croutine_list_init(&task->state_node);
 	task->stack = croutine_stack_alloc(task->scheduler->config.stack_size);
@@ -41,7 +41,6 @@ int croutine_task_init(struct croutine_task *task,
 	task->result = NULL;
 	task->result_policy = CROUTINE_TASK_RESULT_DETACHED;
 	atomic_init(&task->state, CROUTINE_TASK_PENDING);
-	atomic_init(&task->schedulable, 1);
 
 	if (croutine_arch_context_init(&task->context, task->stack->bottom,
 								   task->stack->size,
@@ -60,7 +59,6 @@ void croutine_task_init_current(struct croutine_task *task) {
 		return;
 	}
 
-	atomic_store_explicit(&task->schedulable, 0, memory_order_release);
 	atomic_store_explicit(&task->state, CROUTINE_TASK_RUNNING,
 						  memory_order_release);
 	croutine_current_task = task;
@@ -68,69 +66,101 @@ void croutine_task_init_current(struct croutine_task *task) {
 
 void croutine_task_enter_scheduler(void) {
 	struct croutine_task *task = croutine_current_task;
+	struct croutine_worker *worker;
 
-	if (task == NULL || task->worker == NULL || task->worker->schedule == NULL)
+	if (task == NULL)
 		abort();
 
-	croutine_arch_store_and_call(&task->context, task->worker->schedule);
+	worker = atomic_load_explicit(&task->worker, memory_order_relaxed);
+	if (worker == NULL || worker != croutine_current_worker ||
+		worker->schedule == NULL)
+		abort();
+
+	croutine_arch_store_and_call(&task->context, worker->schedule);
 }
 
 void croutine_task_resume(struct croutine_task *task) {
-	if (task == NULL || task->worker == NULL)
+	struct croutine_worker *worker;
+	enum croutine_task_state expected;
+
+	if (task == NULL)
 		abort();
 
-	croutine_current_worker = task->worker;
-	croutine_current_task = task;
-	atomic_store_explicit(&task->schedulable, 0, memory_order_release);
-	atomic_store_explicit(&task->state, CROUTINE_TASK_RUNNING,
-						  memory_order_release);
+	worker = atomic_load_explicit(&task->worker, memory_order_relaxed);
+	if (worker == NULL || worker != croutine_current_worker)
+		abort();
 
+	expected = CROUTINE_TASK_READY;
+	if (!atomic_compare_exchange_strong_explicit(
+			&task->state, &expected, CROUTINE_TASK_RUNNING,
+			memory_order_acq_rel, memory_order_acquire))
+		abort();
+
+	croutine_current_task = task;
 	croutine_arch_resume_and_ret(&task->context);
 	abort();
 }
 
 enum croutine_task_enqueue_result
 croutine_task_enqueue(struct croutine_task *task) {
-	struct croutine_worker *worker;
-	struct croutine_worker *current_worker;
-	struct croutine_scheduler *scheduler;
+	struct croutine_worker *home;
 
-	if (task == NULL || task->scheduler == NULL)
+	if (task == NULL || task->scheduler == NULL ||
+		atomic_load_explicit(&task->state, memory_order_acquire) !=
+			CROUTINE_TASK_READY)
 		return CROUTINE_TASK_ENQUEUE_ERROR;
 
-	scheduler = task->scheduler;
-	worker = task->worker;
-	current_worker = croutine_current_worker;
-	if (atomic_load_explicit(&task->schedulable, memory_order_acquire) != 0 &&
-		worker != NULL && worker == current_worker &&
-		croutine_worker_enqueue_local(worker, task) == 0)
-		return CROUTINE_TASK_ENQUEUE_LOCAL;
+	home = atomic_load_explicit(&task->worker, memory_order_relaxed);
+	if (home != NULL) {
+		if (home == croutine_current_worker &&
+			croutine_worker_enqueue_local(home, task) == 0)
+			return CROUTINE_TASK_ENQUEUE_LOCAL;
+		if (croutine_worker_enqueue_inbox(home, task) == 0)
+			return CROUTINE_TASK_ENQUEUE_INBOX;
+	}
 
-	if (atomic_load_explicit(&task->schedulable, memory_order_acquire) != 0)
-		task->worker = NULL;
-	if (croutine_scheduler_enqueue_main(scheduler, task) != 0)
-		return CROUTINE_TASK_ENQUEUE_ERROR;
+	if (croutine_scheduler_enqueue_main(task->scheduler, task) != 0)
+		abort();
 	return CROUTINE_TASK_ENQUEUE_MAIN;
 }
 
 int croutine_task_wake(struct croutine_task *task) {
+	enum croutine_scheduler_state scheduler_state;
 	enum croutine_task_state expected;
+	enum croutine_task_state next;
+	int enqueue;
 
 	if (task == NULL || task->scheduler == NULL)
 		return -1;
+	scheduler_state =
+		atomic_load_explicit(&task->scheduler->state, memory_order_acquire);
+	if (scheduler_state == CROUTINE_SCHEDULER_DESTROYING)
+		return -1;
 
-	expected = CROUTINE_TASK_PENDING;
-	if (!atomic_compare_exchange_strong_explicit(
-			&task->state, &expected, CROUTINE_TASK_READY, memory_order_acq_rel,
-			memory_order_acquire)) {
-		expected = CROUTINE_TASK_WAITING;
-		if (!atomic_compare_exchange_strong_explicit(
-				&task->state, &expected, CROUTINE_TASK_READY,
-				memory_order_acq_rel, memory_order_acquire))
+	expected = atomic_load_explicit(&task->state, memory_order_acquire);
+	for (;;) {
+		switch (expected) {
+		case CROUTINE_TASK_PENDING:
+		case CROUTINE_TASK_WAITING:
+			next = CROUTINE_TASK_READY;
+			enqueue = 1;
+			break;
+		case CROUTINE_TASK_PARKING:
+			next = CROUTINE_TASK_NOTIFIED;
+			enqueue = 0;
+			break;
+		default:
 			return -1;
+		}
+
+		if (atomic_compare_exchange_strong_explicit(
+				&task->state, &expected, next, memory_order_acq_rel,
+				memory_order_acquire))
+			break;
 	}
 
-	if (croutine_task_enqueue(task) == CROUTINE_TASK_ENQUEUE_ERROR)
+	if (enqueue &&
+		croutine_task_enqueue(task) == CROUTINE_TASK_ENQUEUE_ERROR)
 		abort();
 
 	return 0;
@@ -145,7 +175,7 @@ int croutine_await(void) {
 
 	expected = CROUTINE_TASK_RUNNING;
 	if (!atomic_compare_exchange_strong_explicit(
-			&task->state, &expected, CROUTINE_TASK_WAITING,
+			&task->state, &expected, CROUTINE_TASK_PARKING,
 			memory_order_acq_rel, memory_order_acquire))
 		return -1;
 
@@ -159,7 +189,7 @@ int croutine_cancel_await(void) {
 	if (task == NULL)
 		return -1;
 
-	expected = CROUTINE_TASK_WAITING;
+	expected = CROUTINE_TASK_PARKING;
 	if (!atomic_compare_exchange_strong_explicit(
 			&task->state, &expected, CROUTINE_TASK_RUNNING,
 			memory_order_acq_rel, memory_order_acquire))
@@ -176,8 +206,8 @@ void croutine_yield(void) {
 		abort();
 
 	state = atomic_load_explicit(&task->state, memory_order_acquire);
-	if (state != CROUTINE_TASK_RUNNING && state != CROUTINE_TASK_WAITING &&
-		state != CROUTINE_TASK_READY)
+	if (state != CROUTINE_TASK_RUNNING && state != CROUTINE_TASK_PARKING &&
+		state != CROUTINE_TASK_NOTIFIED)
 		abort();
 
 	croutine_task_enter_scheduler();

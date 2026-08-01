@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
+#include "queue.h"
 #include "arch.h"
 #include "croutine.h"
 #include "croutine_structures.h"
@@ -22,7 +23,9 @@ enum croutine_task_state {
 	CROUTINE_TASK_PENDING = 0,
 	CROUTINE_TASK_READY,
 	CROUTINE_TASK_RUNNING,
+	CROUTINE_TASK_PARKING,
 	CROUTINE_TASK_WAITING,
+	CROUTINE_TASK_NOTIFIED,
 	CROUTINE_TASK_FINISHED,
 };
 
@@ -54,6 +57,7 @@ enum croutine_worker_state {
 
 enum croutine_task_enqueue_result {
 	CROUTINE_TASK_ENQUEUE_LOCAL = 0,
+	CROUTINE_TASK_ENQUEUE_INBOX,
 	CROUTINE_TASK_ENQUEUE_MAIN,
 	CROUTINE_TASK_ENQUEUE_ERROR,
 };
@@ -74,7 +78,7 @@ struct croutine_stack {
 struct croutine_task {
 	struct croutine_arch_context context;
 	struct croutine_scheduler *scheduler;
-	struct croutine_worker *worker;
+	_Atomic(struct croutine_worker *) worker;
 
 	croutine_list_head scheduler_node;
 	croutine_list_head state_node;
@@ -84,7 +88,6 @@ struct croutine_task {
 	void *arg, *result;
 	enum croutine_task_result_policy result_policy;
 	_Atomic enum croutine_task_state state;
-	_Atomic int schedulable;
 };
 
 struct croutine_wait_handle {
@@ -99,16 +102,19 @@ struct croutine_wait_handle {
 
 struct croutine_worker {
 	struct croutine_scheduler *scheduler;
+	size_t index;
 	pthread_t tid;
 	enum croutine_worker_start_state start_state;
 	_Atomic enum croutine_worker_state state;
 
 	croutine_schedule schedule;
 
-	croutine_queue local_queue;
+	croutine_cldeque *local_queue;
+	croutine_mpmc_queue *inbox_queue;
 	struct croutine_stack *scheduler_stack;
 	struct croutine_arch_context scheduler_context;
-	size_t local_turns;
+	size_t queue_check_turns;
+	uint32_t steal_seed;
 
 	struct croutine_main_event_source *main_event_source;
 	size_t reported_suspend_epoch;
@@ -120,8 +126,11 @@ struct croutine_scheduler {
 
 	pthread_mutex_t state_lock;
 	pthread_cond_t state_cond;
+	pthread_mutex_t start_lock;
+	pthread_cond_t start_cond;
+	int start_released;
 
-	croutine_queue main_queue;
+	croutine_mpmc_queue *main_queue;
 
 	pthread_mutex_t tasks_lock;
 	croutine_list_head tasks;
@@ -131,9 +140,9 @@ struct croutine_scheduler {
 	size_t suspended_workers;
 	size_t suspend_epoch;
 
-	_Atomic size_t searching_workers;
-	_Atomic size_t steal_index;
+	_Atomic size_t scan_index;
 	_Atomic size_t wake_index;
+	_Atomic size_t waiting_workers;
 
 	struct croutine_config config;
 };

@@ -30,8 +30,7 @@ ASFLAGS  += -fPIC $(CPPFLAGS) $(EXTRA_ASFLAGS)
 LDFLAGS  += $(EXTRA_LDFLAGS)
 LDLIBS   +=
 
-# Optional pkg-config dependencies. Keep empty until a source file actually
-# depends on an external package.
+# Optional pkg-config dependencies.
 DEPS ?=
 
 ifneq ($(strip $(DEPS)),)
@@ -77,16 +76,24 @@ LIBASRC := $(SRCDIR)/arch/$(ARCH_IMPL)_switch.S
 LIBOBJ  := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(LIBCSRC))
 LIBOBJ  += $(patsubst $(SRCDIR)/%.S,$(OBJDIR)/%.o,$(LIBASRC))
 
-# Tests
-TEST_FILES := structures.c scheduler.c runtime.c stack.c
+# Tests configuration
+TEST_FILES := structures.c queue.c scheduler.c task.c runtime.c stack.c iouring.c
+LIB_TESTS  := scheduler task runtime iouring stack
+
+IOURING_CFLAGS := $(shell $(PKG_CONFIG) --cflags liburing 2>/dev/null)
+IOURING_LDLIBS := $(shell $(PKG_CONFIG) --libs liburing 2>/dev/null)
 TEST_NAMES := $(basename $(TEST_FILES))
 TEST_BINS  := $(addprefix $(TESTBINDIR)/,$(TEST_NAMES))
 TEST_RPATH := -Wl,-rpath,'$$ORIGIN/../lib'
-TEST_CFLAGS :=
-TEST_LDLIBS := $(THREAD_FLAGS)
+TEST_CFLAGS := $(IOURING_CFLAGS)
+TEST_LDLIBS := $(THREAD_FLAGS) $(IOURING_LDLIBS)
 TEST_ENV ?=
 RUNNER ?=
 SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
+
+# Parse requested component from command line (e.g. `make test queue` or `make test`)
+TEST_COMPONENTS := $(filter $(TEST_NAMES),$(MAKECMDGOALS))
+TEST_RUN_BINS   := $(if $(TEST_COMPONENTS),$(addprefix $(TESTBINDIR)/,$(TEST_COMPONENTS)),$(TEST_BINS))
 
 .PHONY: all lib test memtest $(TEST_NAMES) clean
 
@@ -94,9 +101,9 @@ all: lib
 
 lib: $(LIB) $(BUILD_HEADERS)
 
-test: $(TEST_BINS)
+test: $(TEST_RUN_BINS)
 	@set -e; \
-	for bin in $(TEST_BINS); do \
+	for bin in $(TEST_RUN_BINS); do \
 		$(TEST_ENV) $(RUNNER) ./$$bin; \
 	done
 
@@ -107,7 +114,9 @@ memtest:
 		TEST_ENV="ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1"
 
 $(TEST_NAMES): %: $(TESTBINDIR)/%
-	$(TEST_ENV) $(RUNNER) ./$<
+	@if [ "$(firstword $(MAKECMDGOALS))" != "test" ]; then \
+		$(TEST_ENV) $(RUNNER) ./$<; \
+	fi
 
 clean:
 	rm -rf $(BUILDDIR)
@@ -131,6 +140,9 @@ $(LIB): $(LIBOBJ)
 	mkdir -p $(@D)
 	$(CC) $(TOOLCHAIN_FLAGS) -shared $(LDFLAGS) -Wl,-soname,$(LIB_NAME) -o $@ $^ $(LDLIBS)
 
-$(TESTBINDIR)/%: $(TESTDIR)/%.c $(LIB) $(BUILD_HEADERS) $(PUBLIC_HEADERS) $(INTERNAL_HEADERS)
+# Single generic pattern rule for all test binaries
+$(TESTBINDIR)/%: $(TESTDIR)/%.c $(BUILD_HEADERS) $(PUBLIC_HEADERS) $(INTERNAL_HEADERS) $(if $(filter $(notdir $*),$(LIB_TESTS)),$(LIB))
 	mkdir -p $(@D)
-	$(CC) $(TOOLCHAIN_FLAGS) $(CFLAGS) $(TEST_CFLAGS) $(LDFLAGS) -o $@ $< -L$(LIBDIR) -lcroutine $(TEST_RPATH) $(LDLIBS) $(TEST_LDLIBS)
+	$(CC) $(TOOLCHAIN_FLAGS) $(CFLAGS) $(TEST_CFLAGS) $(LDFLAGS) -o $@ $< \
+		$(if $(filter $(notdir $*),$(LIB_TESTS)),-L$(LIBDIR) -lcroutine $(TEST_RPATH)) \
+		$(LDLIBS) $(TEST_LDLIBS)

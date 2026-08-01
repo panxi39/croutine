@@ -15,6 +15,7 @@ struct croutine_main_event_source {
 	void (*collect)(croutine_main_event_source *self);
 	int (*wake)(croutine_main_event_source *self);
 	void (*suspend)(croutine_main_event_source *self);
+	void (*resume)(croutine_main_event_source *self);
 	void (*destroy)(croutine_main_event_source *self);
 };
 

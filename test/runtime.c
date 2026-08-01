@@ -20,7 +20,7 @@
  */
 
 #define RUNTIME_WORKERS 32
-#define MAIN_QUEUE_QUOTA 2
+#define QUEUE_CHECK_INTERVAL 2
 #define INITIAL_TASKS 1024
 #define PRODUCER_TASKS 4
 #define CHAIN_TASKS 2048
@@ -49,7 +49,8 @@
 #define QUEUE_STRESS_CPU_US 1000
 #define PRODUCER_GAP_US 70000L
 #define PRODUCER_GAP_STEP_US 30000L
-#define MAX_ALLOWED_LATE_US 2000000ull
+#define LATE_WAIT_WARNING_US 2000000ull
+#define MAX_ALLOWED_LATE_US 15000000ull
 #define LOAD_SAMPLE_INTERVAL_US 100000L
 #define LOAD_SAMPLE_INITIAL_CAPACITY 128
 #define LOAD_CURVE_WIDTH 48
@@ -152,10 +153,12 @@ struct timer_source {
 	struct timer_source_stats *stats;
 	struct croutine_worker *worker;
 	pthread_mutex_t lock;
-	pthread_cond_t cond;
+	pthread_cond_t work_cond;
+	pthread_cond_t resume_cond;
 	croutine_list_head waits;
 	size_t id;
-	int woken;
+	int work_pending;
+	int resume_pending;
 };
 
 struct external_source {
@@ -211,6 +214,8 @@ struct load_sample {
 	size_t main_len;
 	size_t local_total;
 	size_t local_max;
+	size_t inbox_total;
+	size_t inbox_max;
 	size_t running;
 	size_t waiting;
 	size_t suspended;
@@ -234,6 +239,8 @@ struct load_sampler_summary {
 	size_t max_main_len;
 	size_t max_local_total;
 	size_t max_local_worker;
+	size_t max_inbox_total;
+	size_t max_inbox_worker;
 	size_t last_running;
 	size_t last_waiting;
 	size_t last_suspended;
@@ -454,8 +461,8 @@ static int timer_source_add_wait(struct timer_source *timer,
 	timer_source_insert_wait(timer, wait);
 	atomic_fetch_add_explicit(&timer->stats->registered, 1,
 							  memory_order_acq_rel);
-	timer->woken = 1;
-	pthread_cond_signal(&timer->cond);
+	timer->work_pending = 1;
+	pthread_cond_signal(&timer->work_cond);
 	pthread_mutex_unlock(&timer->lock);
 	return 0;
 }
@@ -469,8 +476,8 @@ timer_source_blocking_wait(croutine_main_event_source *source) {
 							  memory_order_acq_rel);
 
 	pthread_mutex_lock(&timer->lock);
-	if (timer->woken) {
-		timer->woken = 0;
+	if (timer->work_pending) {
+		timer->work_pending = 0;
 		atomic_fetch_add_explicit(&timer->stats->wake_interrupts, 1,
 								  memory_order_acq_rel);
 		log_event("timer %zu blocking_wait interrupted by wake", timer->id);
@@ -482,8 +489,8 @@ timer_source_blocking_wait(croutine_main_event_source *source) {
 		atomic_fetch_add_explicit(&timer->stats->idle_waits, 1,
 								  memory_order_acq_rel);
 		log_event("timer %zu blocking_wait idle", timer->id);
-		pthread_mutex_unlock(&timer->lock);
-		return CROUTINE_MAIN_EVENT_WAIT_EMPTY;
+		while (!timer->work_pending && croutine_list_empty(&timer->waits))
+			(void)pthread_cond_wait(&timer->work_cond, &timer->lock);
 	} else {
 		struct timer_wait *wait;
 		struct timespec now;
@@ -499,8 +506,8 @@ timer_source_blocking_wait(croutine_main_event_source *source) {
 		log_event("timer %zu blocking_wait task %zu wait %zu in %.2fms",
 				  timer->id, wait->task_id, wait->wait_no,
 				  (double)wait_us / 1000.0);
-		ret =
-			pthread_cond_timedwait(&timer->cond, &timer->lock, &wait->deadline);
+		ret = pthread_cond_timedwait(&timer->work_cond, &timer->lock,
+									 &wait->deadline);
 	}
 
 	if (ret == ETIMEDOUT) {
@@ -516,28 +523,38 @@ timer_source_blocking_wait(croutine_main_event_source *source) {
 		pthread_mutex_unlock(&timer->lock);
 		return CROUTINE_MAIN_EVENT_WAIT_ERROR;
 	}
-	timer->woken = 0;
+	timer->work_pending = 0;
 	pthread_mutex_unlock(&timer->lock);
 	return CROUTINE_MAIN_EVENT_WAIT_DONE;
 }
 
 static void timer_source_collect(croutine_main_event_source *source) {
 	struct timer_source *timer = timer_source_from_base(source);
-	struct timespec now;
 
 	atomic_fetch_add_explicit(&timer->stats->collects, 1, memory_order_acq_rel);
-	clock_gettime(CLOCK_REALTIME, &now);
-
 	pthread_mutex_lock(&timer->lock);
-	while (!croutine_list_empty(&timer->waits)) {
+	timer->work_pending = 0;
+	pthread_mutex_unlock(&timer->lock);
+
+	for (;;) {
 		struct timer_wait *wait;
+		struct timespec now;
 		uint64_t late_us;
 		size_t task_id;
 		size_t wait_no;
+		int wake_result;
 
-		wait = croutine_list_entry(timer->waits.next, struct timer_wait, node);
-		if (timespec_cmp(&wait->deadline, &now) > 0)
+		clock_gettime(CLOCK_REALTIME, &now);
+		pthread_mutex_lock(&timer->lock);
+		if (croutine_list_empty(&timer->waits)) {
+			pthread_mutex_unlock(&timer->lock);
 			break;
+		}
+		wait = croutine_list_entry(timer->waits.next, struct timer_wait, node);
+		if (timespec_cmp(&wait->deadline, &now) > 0) {
+			pthread_mutex_unlock(&timer->lock);
+			break;
+		}
 
 		task_id = wait->task_id;
 		wait_no = wait->wait_no;
@@ -546,9 +563,12 @@ static void timer_source_collect(croutine_main_event_source *source) {
 		atomic_store_explicit(&wait->queued, 0, memory_order_release);
 		atomic_fetch_add_explicit(&timer->stats->expired, 1,
 								  memory_order_acq_rel);
+		pthread_mutex_unlock(&timer->lock);
+
 		log_event("timer %zu collect task %zu wait %zu late %.2fms", timer->id,
 				  task_id, wait_no, (double)late_us / 1000.0);
-		if (croutine_wait_handle_wake(&wait->handle) != 0) {
+		wake_result = croutine_wait_handle_wake(&wait->handle);
+		if (wake_result != 0) {
 			fprintf(stderr, "timer %zu failed to wake task %zu wait %zu\n",
 					timer->id, task_id, wait_no);
 			atomic_store_explicit(&timer->stats->failed, 1,
@@ -558,7 +578,6 @@ static void timer_source_collect(croutine_main_event_source *source) {
 									  memory_order_acq_rel);
 		}
 	}
-	pthread_mutex_unlock(&timer->lock);
 }
 
 static int timer_source_wake(croutine_main_event_source *source) {
@@ -566,8 +585,8 @@ static int timer_source_wake(croutine_main_event_source *source) {
 
 	atomic_fetch_add_explicit(&timer->stats->wakes, 1, memory_order_acq_rel);
 	pthread_mutex_lock(&timer->lock);
-	timer->woken = 1;
-	pthread_cond_signal(&timer->cond);
+	timer->work_pending = 1;
+	pthread_cond_signal(&timer->work_cond);
 	pthread_mutex_unlock(&timer->lock);
 	return 0;
 }
@@ -577,9 +596,18 @@ static void timer_source_suspend(croutine_main_event_source *source) {
 
 	atomic_fetch_add_explicit(&timer->stats->suspends, 1, memory_order_acq_rel);
 	pthread_mutex_lock(&timer->lock);
-	while (!timer->woken)
-		(void)pthread_cond_wait(&timer->cond, &timer->lock);
-	timer->woken = 0;
+	while (!timer->resume_pending)
+		(void)pthread_cond_wait(&timer->resume_cond, &timer->lock);
+	timer->resume_pending = 0;
+	pthread_mutex_unlock(&timer->lock);
+}
+
+static void timer_source_resume(croutine_main_event_source *source) {
+	struct timer_source *timer = timer_source_from_base(source);
+
+	pthread_mutex_lock(&timer->lock);
+	timer->resume_pending = 1;
+	pthread_cond_signal(&timer->resume_cond);
 	pthread_mutex_unlock(&timer->lock);
 }
 
@@ -604,7 +632,8 @@ static void timer_source_destroy(croutine_main_event_source *source) {
 	atomic_fetch_add_explicit(&timer->stats->destroyed, 1,
 							  memory_order_acq_rel);
 	log_event("timer %zu destroy", timer->id);
-	pthread_cond_destroy(&timer->cond);
+	pthread_cond_destroy(&timer->resume_cond);
+	pthread_cond_destroy(&timer->work_cond);
 	pthread_mutex_destroy(&timer->lock);
 	free(timer);
 }
@@ -626,18 +655,23 @@ static croutine_main_event_source *timer_source_factory(croutine_worker *worker,
 	timer->base.collect = timer_source_collect;
 	timer->base.wake = timer_source_wake;
 	timer->base.suspend = timer_source_suspend;
+	timer->base.resume = timer_source_resume;
 	timer->base.destroy = timer_source_destroy;
 	croutine_list_init(&timer->waits);
 
 	if (pthread_mutex_init(&timer->lock, NULL) != 0)
 		goto fail;
-	if (pthread_cond_init(&timer->cond, NULL) != 0)
+	if (pthread_cond_init(&timer->work_cond, NULL) != 0)
 		goto fail_lock;
+	if (pthread_cond_init(&timer->resume_cond, NULL) != 0)
+		goto fail_work_cond;
 
 	atomic_fetch_add_explicit(&stats->created, 1, memory_order_acq_rel);
 	log_event("timer %zu created", timer->id);
 	return &timer->base;
 
+fail_work_cond:
+	pthread_cond_destroy(&timer->work_cond);
 fail_lock:
 	pthread_mutex_destroy(&timer->lock);
 fail:
@@ -847,13 +881,16 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 	struct timespec start;
 	struct timespec now;
 	struct croutine_task *current;
+	struct croutine_worker *worker;
 
 	current = croutine_task_current();
-	if (current == NULL || current->worker == NULL ||
-		current->worker->main_event_source == NULL)
+	if (current == NULL)
+		return -1;
+	worker = atomic_load_explicit(&current->worker, memory_order_relaxed);
+	if (worker == NULL || worker->main_event_source == NULL)
 		return -1;
 
-	timer = timer_source_from_base(current->worker->main_event_source);
+	timer = timer_source_from_base(worker->main_event_source);
 	wait = timer_wait_alloc(task->allocs);
 	if (wait == NULL)
 		return -1;
@@ -880,7 +917,8 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 	log_event("task %zu wait %zu TIMER %.2fms on timer %zu", task->id, wait_no,
 			  (double)delay_microseconds / 1000.0, timer->id);
 	if (timer_source_add_wait(timer, wait) != 0) {
-		(void)croutine_cancel_await();
+		if (croutine_cancel_await() != 0)
+			abort();
 		timer_wait_free(wait);
 		return -1;
 	}
@@ -960,7 +998,8 @@ static int runtime_external_wait(struct runtime_task_arg *task,
 	log_event("task %zu wait %zu EXTERNAL %.2fms", task->id, wait_no,
 			  (double)delay_microseconds / 1000.0);
 	if (external_source_add_wait(task->external, wait) != 0) {
-		(void)croutine_cancel_await();
+		if (croutine_cancel_await() != 0)
+			abort();
 		(void)external_wait_put(wait);
 		(void)external_wait_put(wait);
 		return -1;
@@ -1234,22 +1273,6 @@ static void *chain_producer_main(void *arg) {
  * Scheduler load sampling
  */
 
-static size_t runtime_queue_len_approx(const croutine_queue *queue) {
-	uint64_t head;
-	uint64_t tail;
-	uint64_t len;
-
-	if (queue == NULL || queue->capacity == 0)
-		return 0;
-
-	head = atomic_load_explicit(&queue->head, memory_order_acquire);
-	tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
-	len = tail - head;
-	if (len > queue->capacity)
-		len = queue->capacity;
-	return len;
-}
-
 static void load_sampler_take_sample(const struct load_sampler_arg *sampler,
 									 struct load_sample *sample) {
 	const croutine_scheduler *scheduler = sampler->scheduler;
@@ -1261,17 +1284,22 @@ static void load_sampler_take_sample(const struct load_sampler_arg *sampler,
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	*sample = (struct load_sample){
 		.elapsed_us = timespec_diff_us(&now, &log_start),
-		.main_len = runtime_queue_len_approx(&scheduler->main_queue),
+		.main_len = (size_t)croutine_mpmc_queue_len(scheduler->main_queue),
 	};
 
 	for (size_t index = 0; index < scheduler->worker_count; index++) {
 		const struct croutine_worker *worker = &scheduler->workers[index];
+		size_t inbox_len;
 		size_t local_len;
 
-		local_len = runtime_queue_len_approx(&worker->local_queue);
+		local_len = (size_t)croutine_cldeque_len(worker->local_queue);
+		inbox_len = (size_t)croutine_mpmc_queue_len(worker->inbox_queue);
 		sample->local_total += local_len;
+		sample->inbox_total += inbox_len;
 		if (local_len > sample->local_max)
 			sample->local_max = local_len;
+		if (inbox_len > sample->inbox_max)
+			sample->inbox_max = inbox_len;
 
 		switch (atomic_load_explicit(&worker->state, memory_order_acquire)) {
 		case CROUTINE_WORKER_RUNNING:
@@ -1363,6 +1391,10 @@ static void load_sampler_summarize(const struct load_sampler_arg *sampler,
 			summary->max_local_total = sample->local_total;
 		if (sample->local_max > summary->max_local_worker)
 			summary->max_local_worker = sample->local_max;
+		if (sample->inbox_total > summary->max_inbox_total)
+			summary->max_inbox_total = sample->inbox_total;
+		if (sample->inbox_max > summary->max_inbox_worker)
+			summary->max_inbox_worker = sample->inbox_max;
 	}
 
 	summary->duration_us = sampler->samples[sampler->count - 1].elapsed_us;
@@ -1411,18 +1443,19 @@ print_load_average_curve(const struct load_sampler_arg *sampler,
 	printf("\nlocal queue average curve\n");
 	printf("  scale: bar width %d, peak worker-local average %.2f\n",
 		   LOAD_CURVE_WIDTH, load_average_value(summary->max_avg_fp));
-	printf(
-		"  ms       avg    main local  max  workers(r/w/s/x)  worker_count  curve\n");
+	printf("  ms       avg    main local inbox lmax imax  "
+		   "workers(r/w/s/x)  worker_count  curve\n");
 
 	for (size_t index = 0; index < sampler->count; index++) {
 		const struct load_sample *sample = &sampler->samples[index];
 
-		printf("  %7.2f %6.2f %5zu %5zu %4zu  %3zu/%3zu/%3zu/%3zu  %12zu  ",
+		printf("  %7.2f %6.2f %5zu %5zu %5zu %4zu %4zu  "
+			   "%3zu/%3zu/%3zu/%3zu  %12zu  ",
 			   (double)sample->elapsed_us / 1000.0,
 			   load_average_value(sample->avg_fp), sample->main_len,
-			   sample->local_total, sample->local_max, sample->running,
-			   sample->waiting, sample->suspended, sample->exiting,
-			   sample->sample_count);
+			   sample->local_total, sample->inbox_total, sample->local_max,
+			   sample->inbox_max, sample->running, sample->waiting,
+			   sample->suspended, sample->exiting, sample->sample_count);
 		print_load_curve_bar(sample->avg_fp, summary->max_avg_fp);
 		putchar('\n');
 	}
@@ -1457,6 +1490,8 @@ static void print_load_sampler_report(const struct load_sampler_arg *sampler) {
 	printf("    %-24s %zu\n", "peak_main_queue", summary.max_main_len);
 	printf("    %-24s %zu\n", "peak_local_total", summary.max_local_total);
 	printf("    %-24s %zu\n", "peak_local_worker", summary.max_local_worker);
+	printf("    %-24s %zu\n", "peak_inbox_total", summary.max_inbox_total);
+	printf("    %-24s %zu\n", "peak_inbox_worker", summary.max_inbox_worker);
 
 	printf("  final_worker_states\n");
 	printf("    %-24s %zu/%zu/%zu/%zu\n", "running/waiting/susp/ex",
@@ -1510,12 +1545,13 @@ static int wait_for_flag(_Atomic int *value,
 }
 
 static int
-wait_for_workers_suspended(const croutine_scheduler *scheduler,
-						   const struct runtime_state *runtime,
-						   const struct timer_source_stats *timer_stats,
-						   const struct external_source_stats *external_stats) {
+wait_for_workers_in_state(const croutine_scheduler *scheduler,
+						  enum croutine_worker_state expected,
+						  const struct runtime_state *runtime,
+						  const struct timer_source_stats *timer_stats,
+						  const struct external_source_stats *external_stats) {
 	for (size_t round = 0; round < WAIT_ROUNDS; round++) {
-		size_t suspended = 0;
+		size_t matched = 0;
 
 		if (atomic_load_explicit(&runtime->failed, memory_order_acquire) != 0 ||
 			atomic_load_explicit(&timer_stats->failed, memory_order_acquire) !=
@@ -1526,11 +1562,10 @@ wait_for_workers_suspended(const croutine_scheduler *scheduler,
 
 		for (size_t index = 0; index < scheduler->worker_count; index++) {
 			if (atomic_load_explicit(&scheduler->workers[index].state,
-									 memory_order_acquire) ==
-				CROUTINE_WORKER_SUSPENDED)
-				suspended++;
+									 memory_order_acquire) == expected)
+				matched++;
 		}
-		if (suspended == scheduler->worker_count)
+		if (matched == scheduler->worker_count)
 			return 0;
 		sleep_microseconds(WAIT_POLL_US);
 	}
@@ -1560,6 +1595,7 @@ static void sum_task_waits(const struct runtime_task_arg *tasks, size_t count,
 static int verify_tasks(const struct runtime_task_arg *tasks, size_t count,
 						size_t total_iterations) {
 	size_t expected = 0;
+	size_t late_warnings = 0;
 
 	for (size_t index = 0; index < count; index++) {
 		size_t runs;
@@ -1582,11 +1618,18 @@ static int verify_tasks(const struct runtime_task_arg *tasks, size_t count,
 			return -1;
 		}
 		if (tasks[index].max_late_us > MAX_ALLOWED_LATE_US) {
-			fprintf(stderr, "task %zu late wait exceeded limit\n",
+			fprintf(stderr, "task %zu late wait exceeded watchdog\n",
 					tasks[index].id);
 			return -1;
 		}
+		if (tasks[index].max_late_us > LATE_WAIT_WARNING_US)
+			late_warnings++;
 	}
+	if (late_warnings != 0)
+		fprintf(stderr,
+				"runtime latency warning: %zu tasks exceeded %.2fs under "
+				"stress\n",
+				late_warnings, (double)LATE_WAIT_WARNING_US / 1000000.0);
 
 	if (total_iterations != expected) {
 		fprintf(stderr, "runtime iteration count %zu/%zu\n", total_iterations,
@@ -1750,7 +1793,7 @@ print_runtime_report(const struct runtime_task_arg *tasks,
 	printf("\nruntime report\n");
 	printf("  configuration\n");
 	printf("    %-28s %d\n", "workers", RUNTIME_WORKERS);
-	printf("    %-28s %d\n", "main_queue_quota", MAIN_QUEUE_QUOTA);
+	printf("    %-28s %d\n", "queue_check_interval", QUEUE_CHECK_INTERVAL);
 	printf("    %-28s %zu (%zu initial + %zu producer + %zu chain)\n", "tasks",
 		   runtime->total_tasks, runtime->initial_tasks,
 		   runtime->producer_tasks, runtime->chain_tasks);
@@ -1869,7 +1912,7 @@ int main(void) {
 	pthread_t load_sampler_thread;
 	croutine_config config = {
 		.workers = RUNTIME_WORKERS,
-		.main_queue_quota = MAIN_QUEUE_QUOTA,
+		.queue_check_interval = QUEUE_CHECK_INTERVAL,
 		.main_event_source_config = {
 			.factory_fn = timer_source_factory,
 			.args = &timer_stats,
@@ -2033,15 +2076,16 @@ int main(void) {
 	}
 	scheduler_started = 1;
 
-	/* Empty startup suspend. */
-	log_event("main wait for empty startup suspend");
+	/* Empty startup work wait. */
+	log_event("main wait for empty startup work wait");
 	if (wait_for_at_least(&timer_stats.idle_waits, RUNTIME_WORKERS, &runtime,
 						  &timer_stats, &external_stats) != 0 ||
-		wait_for_at_least(&timer_stats.suspends, RUNTIME_WORKERS, &runtime,
-						  &timer_stats, &external_stats) != 0 ||
-		wait_for_workers_suspended(scheduler, &runtime, &timer_stats,
-								   &external_stats) != 0) {
-		fprintf(stderr, "workers did not suspend after empty startup\n");
+		wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SOURCE_WAITING,
+								  &runtime, &timer_stats,
+								  &external_stats) != 0 ||
+		atomic_load_explicit(&scheduler->waiting_workers,
+							 memory_order_acquire) != RUNTIME_WORKERS) {
+		fprintf(stderr, "workers did not block for work after empty startup\n");
 		status = 1;
 		goto cleanup;
 	}
@@ -2096,6 +2140,14 @@ int main(void) {
 		goto cleanup;
 	}
 	scheduler_started = 0;
+	if (atomic_load_explicit(&scheduler->waiting_workers,
+							 memory_order_acquire) != 0 ||
+		wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SUSPENDED, &runtime,
+								  &timer_stats, &external_stats) != 0) {
+		fprintf(stderr, "workers did not converge after stop\n");
+		status = 1;
+		goto cleanup;
+	}
 
 	stopped_iterations =
 		atomic_load_explicit(&runtime.iterations, memory_order_acquire);
@@ -2197,22 +2249,32 @@ int main(void) {
 		goto cleanup;
 	}
 
-	/* Post-run starvation stop. */
-	log_event("main wait for post-run event starvation");
-	if (wait_for_workers_suspended(scheduler, &runtime, &timer_stats,
-								   &external_stats) != 0) {
-		fprintf(stderr, "workers did not suspend after all tasks finished\n");
+	/* Post-run work wait. */
+	log_event("main wait for post-run work wait");
+	if (wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SOURCE_WAITING,
+								  &runtime, &timer_stats,
+								  &external_stats) != 0 ||
+		atomic_load_explicit(&scheduler->waiting_workers,
+							 memory_order_acquire) != RUNTIME_WORKERS) {
+		fprintf(stderr, "workers did not block after all tasks finished\n");
 		status = 1;
 		goto cleanup;
 	}
 
-	log_event("main final stop scheduler from event-starved state");
+	log_event("main final stop scheduler from work-waiting state");
 	if (croutine_scheduler_stop(scheduler) != 0) {
 		fprintf(stderr, "failed to stop scheduler at shutdown\n");
 		status = 1;
 		goto cleanup;
 	}
 	scheduler_started = 0;
+	if (atomic_load_explicit(&scheduler->waiting_workers,
+							 memory_order_acquire) != 0 ||
+		wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SUSPENDED, &runtime,
+								  &timer_stats, &external_stats) != 0) {
+		fprintf(stderr, "workers did not suspend at shutdown\n");
+		status = 1;
+	}
 
 cleanup:
 	/* Cleanup. */

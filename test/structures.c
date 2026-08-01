@@ -81,87 +81,6 @@ static int test_refcount(void) {
 	return 0;
 }
 
-static int test_queue(void) {
-	struct croutine_queue queue;
-	int a = 1;
-	int b = 2;
-	int c = 3;
-	int d = 4;
-	void *item;
-
-	CHECK(croutine_queue_init(NULL, 3) == -1,
-		  "queue init should reject NULL queue");
-	CHECK(croutine_queue_init(&queue, 0) == -1,
-		  "queue init should reject zero capacity");
-	CHECK(croutine_queue_init(&queue, 3) == 0, "queue init should succeed");
-
-	CHECK(croutine_queue_empty(&queue), "queue should start empty");
-	CHECK(!croutine_queue_full(&queue), "empty queue should not be full");
-	CHECK(croutine_queue_pop(&queue, &item) == -1,
-		  "pop from empty queue should fail");
-
-	CHECK(croutine_queue_push(&queue, &a) == 0, "push a should succeed");
-	CHECK(croutine_queue_push(&queue, &b) == 0, "push b should succeed");
-	CHECK(croutine_queue_push(&queue, &c) == 0, "push c should succeed");
-	CHECK(croutine_queue_full(&queue), "queue should be full");
-	CHECK(croutine_queue_push(&queue, &d) == -1,
-		  "push to full queue should fail");
-
-	CHECK(croutine_queue_pop(&queue, &item) == 0, "pop a should succeed");
-	CHECK(item == &a, "queue should preserve FIFO order for a");
-	CHECK(!croutine_queue_full(&queue),
-		  "queue should not be full after one pop");
-
-	CHECK(croutine_queue_push(&queue, &d) == 0,
-		  "push d should wrap through buffer");
-	CHECK(croutine_queue_pop(&queue, &item) == 0, "pop b should succeed");
-	CHECK(item == &b, "queue should preserve FIFO order for b");
-	CHECK(croutine_queue_pop(&queue, &item) == 0, "pop c should succeed");
-	CHECK(item == &c, "queue should preserve FIFO order for c");
-	CHECK(croutine_queue_pop(&queue, &item) == 0, "pop d should succeed");
-	CHECK(item == &d, "queue should preserve FIFO order for d");
-	CHECK(croutine_queue_empty(&queue), "queue should be empty after pops");
-
-	CHECK(croutine_queue_push(&queue, &a) == 0,
-		  "push before reset should work");
-	croutine_queue_reset(&queue);
-	CHECK(croutine_queue_empty(&queue), "reset should empty queue");
-
-	croutine_queue_destroy(&queue);
-	CHECK(queue.cells == NULL, "destroy should clear queue cells");
-	CHECK(queue.capacity == 0, "destroy should clear queue capacity");
-
-	CHECK(croutine_queue_init(&queue, 6) == 0,
-		  "victim queue init should succeed");
-	struct croutine_queue target;
-	CHECK(croutine_queue_init(&target, 6) == 0,
-		  "target queue init should succeed");
-	CHECK(croutine_queue_push_owner(&queue, &a) == 0,
-		  "owner push a should succeed");
-	CHECK(croutine_queue_push_owner(&queue, &b) == 0,
-		  "owner push b should succeed");
-	CHECK(croutine_queue_push_owner(&queue, &c) == 0,
-		  "owner push c should succeed");
-	CHECK(croutine_queue_push_owner(&queue, &d) == 0,
-		  "owner push d should succeed");
-	CHECK(croutine_queue_steal_half(&queue, &target, &item) == 2,
-		  "steal half of four items should steal two");
-	CHECK(item == &b, "steal should return newest item in stolen batch");
-	CHECK(croutine_queue_pop(&target, &item) == 0,
-		  "target should contain remaining stolen item");
-	CHECK(item == &a, "target should contain oldest stolen item");
-	CHECK(croutine_queue_pop(&queue, &item) == 0,
-		  "victim should retain first un-stolen item");
-	CHECK(item == &c, "victim first remaining item should be c");
-	CHECK(croutine_queue_pop(&queue, &item) == 0,
-		  "victim should retain second un-stolen item");
-	CHECK(item == &d, "victim second remaining item should be d");
-	croutine_queue_destroy(&target);
-	croutine_queue_destroy(&queue);
-
-	return 0;
-}
-
 static int test_list(void) {
 	struct croutine_list_head head;
 	struct croutine_list_head *pos;
@@ -217,9 +136,6 @@ int main(void) {
 		return 1;
 
 	if (test_refcount() != 0)
-		return 1;
-
-	if (test_queue() != 0)
 		return 1;
 
 	if (test_list() != 0)
