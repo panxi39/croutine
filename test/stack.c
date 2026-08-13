@@ -19,8 +19,7 @@ static int check(int condition, const char *message) {
 }
 
 static int test_invalid_size(void) {
-	return check(croutine_stack_alloc(0) == (struct croutine_stack *)-1,
-				 "zero-sized stack allocation should fail");
+	return check(croutine_stack_alloc(0) == (struct croutine_stack *)-1, "zero-sized stack allocation should fail");
 }
 
 static int test_stack_layout(void) {
@@ -30,21 +29,17 @@ static int test_stack_layout(void) {
 	int status = 0;
 
 	stack = croutine_stack_alloc(TEST_STACK_SIZE);
-	if (check(stack != (struct croutine_stack *)-1,
-			  "stack allocation should succeed") != 0)
+	if (check(stack != (struct croutine_stack *)-1, "stack allocation should succeed") != 0)
 		return -1;
 
-	if (check(stack->size == TEST_STACK_SIZE,
-			  "stack should preserve requested usable size") != 0)
+	if (check(stack->size == TEST_STACK_SIZE, "stack should preserve requested usable size") != 0)
 		status = -1;
-	if (check((char *)stack->bottom < (char *)stack->top,
-			  "stack bottom should precede top") != 0)
+	if (check((char *)stack->bottom < (char *)stack->top, "stack bottom should precede top") != 0)
 		status = -1;
 	if (check((char *)stack->top == (char *)stack->bottom + TEST_STACK_SIZE,
 			  "stack top should match requested usable size") != 0)
 		status = -1;
-	if (check((char *)stack->mmap_base < (char *)stack->bottom,
-			  "mapping should include guard page before bottom") != 0)
+	if (check((char *)stack->mmap_base < (char *)stack->bottom, "mapping should include guard page before bottom") != 0)
 		status = -1;
 
 	bottom = stack->bottom;
@@ -62,8 +57,7 @@ static int test_guard_page(void) {
 	int status;
 
 	stack = croutine_stack_alloc(TEST_STACK_SIZE);
-	if (check(stack != (struct croutine_stack *)-1,
-			  "stack allocation for guard test should succeed") != 0)
+	if (check(stack != (struct croutine_stack *)-1, "stack allocation for guard test should succeed") != 0)
 		return -1;
 
 	pid = fork();

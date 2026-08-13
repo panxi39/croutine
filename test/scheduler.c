@@ -85,8 +85,7 @@ static void *task_entry(void *arg) {
 
 	for (index = 0; index < task->repeat; index++) {
 		task->ran++;
-		printf("task %zu iteration %zu/%zu\n", task->id, index + 1,
-			   task->repeat);
+		printf("task %zu iteration %zu/%zu\n", task->id, index + 1, task->repeat);
 		yield();
 	}
 
@@ -125,14 +124,12 @@ static void schedule(void) {
 
 		if (current->state == CROUTINE_TASK_FINISHED) {
 			active_run->finished++;
-		} else if (!active_run->failed &&
-				   croutine_mpmc_queue_push(active_run->queue, task) != 1) {
+		} else if (!active_run->failed && croutine_mpmc_queue_push(active_run->queue, task) != 1) {
 			fail("run queue is full");
 		}
 	}
 
-	if (!active_run->failed &&
-		(item = croutine_mpmc_queue_pop(active_run->queue)) != NULL) {
+	if (!active_run->failed && (item = croutine_mpmc_queue_pop(active_run->queue)) != NULL) {
 		struct test_task *task = item;
 
 		croutine_task_init_current(&task->task);
@@ -159,8 +156,7 @@ static int init_run(struct run *run, struct config *config) {
 	run->repeat = config->repeat;
 	run->seed = (uint32_t)time(NULL);
 
-	run->queue =
-		croutine_mpmc_queue_init((uint32_t)next_power_of_two(run->task_count));
+	run->queue = croutine_mpmc_queue_init((uint32_t)next_power_of_two(run->task_count));
 	if (run->queue == NULL)
 		return -1;
 
@@ -176,9 +172,8 @@ static int init_run(struct run *run, struct config *config) {
 		task->state = CROUTINE_TASK_PENDING;
 
 		if (task->stack == NULL || task->stack == (struct croutine_stack *)-1 ||
-			croutine_arch_context_init(
-				&task->context, task->stack->bottom, task->stack->size,
-				(croutine_arch_entry)task_call_entry) != 0)
+			croutine_arch_context_init(&task->context, task->stack->bottom, task->stack->size,
+									   (croutine_arch_entry)task_call_entry) != 0)
 			return -1;
 
 		if (croutine_mpmc_queue_push(run->queue, test_task) != 1)
@@ -197,8 +192,7 @@ static int verify_run(const struct run *run) {
 	for (index = 0; index < run->task_count; index++) {
 		const struct test_task *task = &run->tasks[index];
 
-		if (task->task.state != CROUTINE_TASK_FINISHED ||
-			task->task.result != &task->value || task->ran != run->repeat)
+		if (task->task.state != CROUTINE_TASK_FINISHED || task->task.result != &task->value || task->ran != run->repeat)
 			return -1;
 	}
 
@@ -233,8 +227,7 @@ static int parse_count(const char *text, size_t *value) {
 
 	errno = 0;
 	parsed = strtoull(text, &end, 10);
-	if (errno != 0 || end == text || *end != '\0' || parsed == 0 ||
-		parsed > SIZE_MAX)
+	if (errno != 0 || end == text || *end != '\0' || parsed == 0 || parsed > SIZE_MAX)
 		return -1;
 
 	*value = (size_t)parsed;
@@ -285,14 +278,12 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	if (argc == 3 && (parse_count(argv[1], &config.task_count) != 0 ||
-					  parse_count(argv[2], &config.repeat) != 0)) {
+	if (argc == 3 && (parse_count(argv[1], &config.task_count) != 0 || parse_count(argv[2], &config.repeat) != 0)) {
 		fprintf(stderr, "arguments must be positive integers\n");
 		return 1;
 	}
 
-	if (config.task_count > MAX_TASK_COUNT ||
-		config.repeat > MAX_REPEAT_COUNT) {
+	if (config.task_count > MAX_TASK_COUNT || config.repeat > MAX_REPEAT_COUNT) {
 		fprintf(stderr, "test parameters are out of range\n");
 		return 1;
 	}
@@ -324,8 +315,7 @@ int main(int argc, char **argv) {
 	}
 
 	for (index = 0; index < config.task_count; index++) {
-		printf("main task %zu result %zu\n", index,
-			   *(size_t *)config.tasks[index].task.result);
+		printf("main task %zu result %zu\n", index, *(size_t *)config.tasks[index].task.result);
 	}
 
 	destroy_tasks(config.tasks, config.task_count);

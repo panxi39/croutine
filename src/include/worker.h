@@ -3,16 +3,13 @@
 
 #include "types.h"
 
-int croutine_worker_init(struct croutine_worker *worker,
-						 struct croutine_scheduler *scheduler);
+int croutine_worker_init(struct croutine_worker *worker, struct croutine_scheduler *scheduler);
 int croutine_worker_start(struct croutine_worker *worker);
 int croutine_worker_join(struct croutine_worker *worker);
 void croutine_worker_destroy(struct croutine_worker *worker);
 void croutine_worker_schedule(void);
-int croutine_worker_enqueue_local(struct croutine_worker *worker,
-								  struct croutine_task *task);
-int croutine_worker_enqueue_inbox(struct croutine_worker *worker,
-								  struct croutine_task *task);
+int croutine_worker_enqueue_local(struct croutine_worker *worker, struct croutine_task *task);
+int croutine_worker_enqueue_inbox(struct croutine_worker *worker, struct croutine_task *task);
 void croutine_worker_work_wake(struct croutine_worker *worker);
 void croutine_worker_resume(struct croutine_worker *worker);
 

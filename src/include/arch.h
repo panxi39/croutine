@@ -16,12 +16,10 @@ typedef struct croutine_arch_context croutine_arch_context;
 typedef void (*croutine_arch_entry)(void);
 typedef void (*croutine_arch_call)(void);
 
-int croutine_arch_context_init(struct croutine_arch_context *context,
-							   void *stack_base, size_t stack_size,
+int croutine_arch_context_init(struct croutine_arch_context *context, void *stack_base, size_t stack_size,
 							   croutine_arch_entry entry);
 
-void croutine_arch_store_and_call(struct croutine_arch_context *context,
-								  croutine_arch_call func);
+void croutine_arch_store_and_call(struct croutine_arch_context *context, croutine_arch_call func);
 void croutine_arch_resume_and_ret(struct croutine_arch_context *context);
 
 #endif

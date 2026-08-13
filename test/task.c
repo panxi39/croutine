@@ -61,13 +61,11 @@ struct main_interval_context {
 	_Atomic int observed_runs;
 };
 
-static struct test_source *test_source_from_base(
-	croutine_main_event_source *base) {
+static struct test_source *test_source_from_base(croutine_main_event_source *base) {
 	return (struct test_source *)base;
 }
 
-static enum croutine_main_event_wait_result
-source_blocking_wait(croutine_main_event_source *base) {
+static enum croutine_main_event_wait_result source_blocking_wait(croutine_main_event_source *base) {
 	struct test_source *source = test_source_from_base(base);
 
 	pthread_mutex_lock(&source->lock);
@@ -124,8 +122,7 @@ static void source_destroy(croutine_main_event_source *base) {
 	free(source);
 }
 
-static croutine_main_event_source *
-source_factory(croutine_worker *worker, void *arg) {
+static croutine_main_event_source *source_factory(croutine_worker *worker, void *arg) {
 	struct test_source *source;
 
 	(void)worker;
@@ -157,8 +154,7 @@ fail_free:
 	return NULL;
 }
 
-static int task_state_is(struct croutine_task *task,
-						 enum croutine_task_state state) {
+static int task_state_is(struct croutine_task *task, enum croutine_task_state state) {
 	return atomic_load_explicit(&task->state, memory_order_acquire) == state;
 }
 
@@ -175,9 +171,7 @@ static void *state_task(void *arg) {
 		return NULL;
 	}
 
-	if (croutine_await() != 0 ||
-		!task_state_is(task, CROUTINE_TASK_PARKING) ||
-		croutine_task_wake(task) != 0 ||
+	if (croutine_await() != 0 || !task_state_is(task, CROUTINE_TASK_PARKING) || croutine_task_wake(task) != 0 ||
 		!task_state_is(task, CROUTINE_TASK_NOTIFIED)) {
 		fail(context);
 		return NULL;
@@ -188,15 +182,13 @@ static void *state_task(void *arg) {
 		return NULL;
 	}
 
-	if (croutine_await() != 0 || croutine_cancel_await() != 0 ||
-		!task_state_is(task, CROUTINE_TASK_RUNNING)) {
+	if (croutine_await() != 0 || croutine_cancel_await() != 0 || !task_state_is(task, CROUTINE_TASK_RUNNING)) {
 		fail(context);
 		return NULL;
 	}
 
 	croutine_yield();
-	if (!task_state_is(task, CROUTINE_TASK_RUNNING) ||
-		croutine_await() != 0) {
+	if (!task_state_is(task, CROUTINE_TASK_RUNNING) || croutine_await() != 0) {
 		fail(context);
 		return NULL;
 	}
@@ -214,8 +206,7 @@ static void *state_task(void *arg) {
 			fail(context);
 			return NULL;
 		}
-		atomic_store_explicit(&context->stage, (int)round + 2,
-							  memory_order_release);
+		atomic_store_explicit(&context->stage, (int)round + 2, memory_order_release);
 		croutine_yield();
 		if (!task_state_is(task, CROUTINE_TASK_RUNNING)) {
 			fail(context);
@@ -223,8 +214,7 @@ static void *state_task(void *arg) {
 		}
 	}
 
-	atomic_store_explicit(&context->stage, RACE_ROUNDS + 2,
-						  memory_order_release);
+	atomic_store_explicit(&context->stage, RACE_ROUNDS + 2, memory_order_release);
 	return NULL;
 }
 
@@ -241,29 +231,24 @@ static int wait_for_stage(struct test_context *context, int stage) {
 	return -1;
 }
 
-static int wait_for_task_state_failed(struct croutine_task *task,
-									  _Atomic int *failed,
-									  enum croutine_task_state state) {
+static int wait_for_task_state_failed(struct croutine_task *task, _Atomic int *failed, enum croutine_task_state state) {
 	struct timespec pause = { .tv_nsec = WAIT_NS };
 
 	for (size_t attempt = 0; attempt < WAIT_LIMIT; attempt++) {
 		if (task != NULL && task_state_is(task, state))
 			return 0;
-		if (failed != NULL &&
-			atomic_load_explicit(failed, memory_order_acquire) != 0)
+		if (failed != NULL && atomic_load_explicit(failed, memory_order_acquire) != 0)
 			return -1;
 		nanosleep(&pause, NULL);
 	}
 	return -1;
 }
 
-static int wait_for_task_state(struct test_context *context,
-							   enum croutine_task_state state) {
+static int wait_for_task_state(struct test_context *context, enum croutine_task_state state) {
 	return wait_for_task_state_failed(context->task, &context->failed, state);
 }
 
-static int wait_for_worker_state(struct croutine_worker *worker,
-								 enum croutine_worker_state state) {
+static int wait_for_worker_state(struct croutine_worker *worker, enum croutine_worker_state state) {
 	struct timespec pause = { .tv_nsec = WAIT_NS };
 
 	for (size_t attempt = 0; attempt < WAIT_LIMIT; attempt++) {
@@ -274,8 +259,7 @@ static int wait_for_worker_state(struct croutine_worker *worker,
 	return -1;
 }
 
-static int wait_for_affinity_stage(struct affinity_context *context,
-								   int stage) {
+static int wait_for_affinity_stage(struct affinity_context *context, int stage) {
 	struct timespec pause = { .tv_nsec = WAIT_NS };
 
 	for (size_t attempt = 0; attempt < WAIT_LIMIT; attempt++) {
@@ -331,10 +315,9 @@ static void *inbox_waiting_task(void *arg) {
 	}
 	atomic_store_explicit(&context->waiting_ready, 1, memory_order_release);
 	croutine_yield();
-	atomic_store_explicit(
-		&context->waiting_order,
-		atomic_fetch_add_explicit(&context->order, 1, memory_order_relaxed) + 1,
-		memory_order_release);
+	atomic_store_explicit(&context->waiting_order,
+						  atomic_fetch_add_explicit(&context->order, 1, memory_order_relaxed) + 1,
+						  memory_order_release);
 	return NULL;
 }
 
@@ -345,10 +328,9 @@ static void *inbox_runner_task(void *arg) {
 	while (atomic_load_explicit(&context->wake_done, memory_order_acquire) == 0)
 		;
 	croutine_yield();
-	atomic_store_explicit(
-		&context->runner_order,
-		atomic_fetch_add_explicit(&context->order, 1, memory_order_relaxed) + 1,
-		memory_order_release);
+	atomic_store_explicit(&context->runner_order,
+						  atomic_fetch_add_explicit(&context->order, 1, memory_order_relaxed) + 1,
+						  memory_order_release);
 	return NULL;
 }
 
@@ -378,19 +360,15 @@ static int test_inbox_priority(const croutine_config *base_config) {
 	atomic_init(&context.waiting_order, 0);
 	atomic_init(&context.runner_order, 0);
 	atomic_init(&context.failed, 0);
-	if (croutine_scheduler_create(&scheduler, &config) != 0 ||
-		croutine_scheduler_start(scheduler) != 0 ||
+	if (croutine_scheduler_create(&scheduler, &config) != 0 || croutine_scheduler_start(scheduler) != 0 ||
 		croutine_spawn(scheduler, inbox_waiting_task, &context) != 0 ||
 		wait_for_atomic(&context.waiting_ready, 1) != 0 ||
-		wait_for_task_state_failed(context.waiting_task, &context.failed,
-								   CROUTINE_TASK_WAITING) != 0 ||
-		croutine_spawn(scheduler, inbox_runner_task, &context) != 0 ||
-		wait_for_atomic(&context.runner_ready, 1) != 0 ||
+		wait_for_task_state_failed(context.waiting_task, &context.failed, CROUTINE_TASK_WAITING) != 0 ||
+		croutine_spawn(scheduler, inbox_runner_task, &context) != 0 || wait_for_atomic(&context.runner_ready, 1) != 0 ||
 		croutine_task_wake(context.waiting_task) != 0)
 		goto out;
 	atomic_store_explicit(&context.wake_done, 1, memory_order_release);
-	if (wait_for_atomic(&context.waiting_order, 1) != 0 ||
-		wait_for_atomic(&context.runner_order, 2) != 0 ||
+	if (wait_for_atomic(&context.waiting_order, 1) != 0 || wait_for_atomic(&context.runner_order, 2) != 0 ||
 		atomic_load_explicit(&context.failed, memory_order_acquire) != 0)
 		goto out;
 	status = 0;
@@ -408,15 +386,13 @@ static void *main_interval_runner(void *arg) {
 	struct main_interval_context *context = arg;
 
 	atomic_store_explicit(&context->runner_ready, 1, memory_order_release);
-	while (atomic_load_explicit(&context->main_spawned,
-								memory_order_acquire) == 0)
+	while (atomic_load_explicit(&context->main_spawned, memory_order_acquire) == 0)
 		;
 	for (;;) {
 		croutine_yield();
 		if (atomic_load_explicit(&context->main_done, memory_order_acquire) != 0)
 			break;
-		atomic_fetch_add_explicit(&context->runner_runs, 1,
-								  memory_order_relaxed);
+		atomic_fetch_add_explicit(&context->runner_runs, 1, memory_order_relaxed);
 	}
 	return NULL;
 }
@@ -424,10 +400,8 @@ static void *main_interval_runner(void *arg) {
 static void *main_interval_task(void *arg) {
 	struct main_interval_context *context = arg;
 
-	atomic_store_explicit(
-		&context->observed_runs,
-		atomic_load_explicit(&context->runner_runs, memory_order_relaxed),
-		memory_order_release);
+	atomic_store_explicit(&context->observed_runs, atomic_load_explicit(&context->runner_runs, memory_order_relaxed),
+						  memory_order_release);
 	atomic_store_explicit(&context->main_done, 1, memory_order_release);
 	return NULL;
 }
@@ -445,19 +419,16 @@ static int test_main_interval(const croutine_config *base_config) {
 	atomic_init(&context.main_done, 0);
 	atomic_init(&context.runner_runs, 0);
 	atomic_init(&context.observed_runs, 0);
-	if (croutine_scheduler_create(&scheduler, &config) != 0 ||
-		croutine_scheduler_start(scheduler) != 0 ||
+	if (croutine_scheduler_create(&scheduler, &config) != 0 || croutine_scheduler_start(scheduler) != 0 ||
 		croutine_spawn(scheduler, main_interval_runner, &context) != 0 ||
-		wait_for_atomic(&context.runner_ready, 1) != 0 ||
-		croutine_spawn(scheduler, main_interval_task, &context) != 0)
+		wait_for_atomic(&context.runner_ready, 1) != 0 || croutine_spawn(scheduler, main_interval_task, &context) != 0)
 		goto out;
 	atomic_store_explicit(&context.main_spawned, 1, memory_order_release);
 	if (wait_for_atomic(&context.main_done, 1) != 0)
 		goto out;
 	if (atomic_load_explicit(&context.observed_runs, memory_order_acquire) != 3) {
 		fprintf(stderr, "observed main after %d runner runs\n",
-				atomic_load_explicit(&context.observed_runs,
-									 memory_order_acquire));
+				atomic_load_explicit(&context.observed_runs, memory_order_acquire));
 		goto out;
 	}
 	status = 0;
@@ -481,27 +452,19 @@ static int test_inbox_affinity(const croutine_config *base_config) {
 	config.workers = 2;
 	atomic_init(&context.stage, 0);
 	atomic_init(&context.failed, 0);
-	if (croutine_scheduler_create(&scheduler, &config) != 0 ||
-		croutine_scheduler_start(scheduler) != 0 ||
+	if (croutine_scheduler_create(&scheduler, &config) != 0 || croutine_scheduler_start(scheduler) != 0 ||
 		croutine_spawn(scheduler, affinity_task, &context) != 0)
 		goto out;
-	if (wait_for_affinity_stage(&context, 1) != 0 || context.task == NULL ||
-		context.home == NULL ||
-		wait_for_task_state_failed(context.task, &context.failed,
-								   CROUTINE_TASK_WAITING) != 0 ||
-		croutine_task_wake(context.task) != 0 ||
-		wait_for_affinity_stage(&context, 2) != 0 ||
-		wait_for_task_state_failed(context.task, &context.failed,
-								   CROUTINE_TASK_WAITING) != 0)
+	if (wait_for_affinity_stage(&context, 1) != 0 || context.task == NULL || context.home == NULL ||
+		wait_for_task_state_failed(context.task, &context.failed, CROUTINE_TASK_WAITING) != 0 ||
+		croutine_task_wake(context.task) != 0 || wait_for_affinity_stage(&context, 2) != 0 ||
+		wait_for_task_state_failed(context.task, &context.failed, CROUTINE_TASK_WAITING) != 0)
 		goto out;
 
-	if (croutine_scheduler_stop(scheduler) != 0 ||
-		croutine_task_wake(context.task) != 0 ||
+	if (croutine_scheduler_stop(scheduler) != 0 || croutine_task_wake(context.task) != 0 ||
 		croutine_mpmc_queue_len(context.home->inbox_queue) != 1 ||
-		croutine_mpmc_queue_len(scheduler->main_queue) != 0 ||
-		croutine_scheduler_start(scheduler) != 0 ||
-		wait_for_affinity_stage(&context, 3) != 0 ||
-		atomic_load_explicit(&context.failed, memory_order_acquire) != 0)
+		croutine_mpmc_queue_len(scheduler->main_queue) != 0 || croutine_scheduler_start(scheduler) != 0 ||
+		wait_for_affinity_stage(&context, 3) != 0 || atomic_load_explicit(&context.failed, memory_order_acquire) != 0)
 		goto out;
 	status = 0;
 
@@ -513,8 +476,7 @@ out:
 	return status;
 }
 
-static void init_ready_task(struct croutine_task *task,
-							struct croutine_scheduler *scheduler,
+static void init_ready_task(struct croutine_task *task, struct croutine_scheduler *scheduler,
 							struct croutine_worker *home) {
 	memset(task, 0, sizeof(*task));
 	task->scheduler = scheduler;
@@ -585,10 +547,8 @@ static int test_config_normalization(const croutine_config *base_config) {
 	if (croutine_scheduler_create(&scheduler, &config) != 0)
 		return -1;
 	if (scheduler->config.inbox_queue_capacity != 8 ||
-		scheduler->config.main_queue_capacity !=
-			CROUTINE_DEFAULT_MAIN_QUEUE_CAPACITY ||
-		scheduler->config.queue_check_interval != 7 ||
-		scheduler->config.steal_batch_max != 17 ||
+		scheduler->config.main_queue_capacity != CROUTINE_DEFAULT_MAIN_QUEUE_CAPACITY ||
+		scheduler->config.queue_check_interval != 7 || scheduler->config.steal_batch_max != 17 ||
 		croutine_scheduler_destroy(scheduler) != 0)
 		return -1;
 
@@ -599,8 +559,7 @@ static int test_config_normalization(const croutine_config *base_config) {
 	config = *base_config;
 	config.local_queue_capacity = 8;
 	config.inbox_queue_capacity = 16;
-	if (croutine_scheduler_create(&scheduler, &config) != 0 ||
-		croutine_scheduler_destroy(scheduler) != 0)
+	if (croutine_scheduler_create(&scheduler, &config) != 0 || croutine_scheduler_destroy(scheduler) != 0)
 		return -1;
 	config = *base_config;
 	config.inbox_queue_capacity = 3;
@@ -615,10 +574,7 @@ static int test_config_normalization(const croutine_config *base_config) {
 	config.queue_check_interval = 9;
 	if (croutine_scheduler_create(&scheduler, &config) != 0)
 		return -1;
-	return scheduler->config.queue_check_interval == 9 &&
-				   croutine_scheduler_destroy(scheduler) == 0 ?
-			   0 :
-			   -1;
+	return scheduler->config.queue_check_interval == 9 && croutine_scheduler_destroy(scheduler) == 0 ? 0 : -1;
 }
 
 static int test_overload_abort(const croutine_config *base_config) {
@@ -651,8 +607,7 @@ static int test_overload_abort(const croutine_config *base_config) {
 	}
 	if (waitpid(child, &child_status, 0) != child)
 		return -1;
-	return WIFSIGNALED(child_status) && WTERMSIG(child_status) == SIGABRT ? 0 :
-																			-1;
+	return WIFSIGNALED(child_status) && WTERMSIG(child_status) == SIGABRT ? 0 : -1;
 }
 
 int main(void) {
@@ -695,17 +650,12 @@ int main(void) {
 		fprintf(stderr, "inbox affinity failed\n");
 		return 1;
 	}
-	if (croutine_scheduler_create(&unstarted, &config) != 0 ||
-		croutine_scheduler_destroy(unstarted) != 0)
+	if (croutine_scheduler_create(&unstarted, &config) != 0 || croutine_scheduler_destroy(unstarted) != 0)
 		return 1;
-	if (croutine_scheduler_create(&scheduler, &config) != 0 ||
-		croutine_scheduler_stop(scheduler) != 0 ||
-		atomic_load_explicit(&scheduler->state, memory_order_acquire) !=
-			CROUTINE_SCHEDULER_INIT ||
-		croutine_spawn(scheduler, state_task, &context) != 0 ||
-		croutine_scheduler_start(scheduler) != 0 ||
-		croutine_scheduler_start(scheduler) != 0 ||
-		croutine_scheduler_destroy(scheduler) != -1)
+	if (croutine_scheduler_create(&scheduler, &config) != 0 || croutine_scheduler_stop(scheduler) != 0 ||
+		atomic_load_explicit(&scheduler->state, memory_order_acquire) != CROUTINE_SCHEDULER_INIT ||
+		croutine_spawn(scheduler, state_task, &context) != 0 || croutine_scheduler_start(scheduler) != 0 ||
+		croutine_scheduler_start(scheduler) != 0 || croutine_scheduler_destroy(scheduler) != -1)
 		goto out;
 
 	if (wait_for_stage(&context, 1) != 0 || context.task == NULL ||
@@ -714,49 +664,36 @@ int main(void) {
 	if (croutine_task_wake(context.task) != 0)
 		goto out_stop;
 	for (size_t round = 0; round < RACE_ROUNDS; round++) {
-		if (wait_for_stage(&context, (int)round + 2) != 0 ||
-			croutine_task_wake(context.task) != 0)
+		if (wait_for_stage(&context, (int)round + 2) != 0 || croutine_task_wake(context.task) != 0)
 			goto out_stop;
 	}
 	if (wait_for_stage(&context, RACE_ROUNDS + 2) != 0 ||
 		atomic_load_explicit(&context.failed, memory_order_acquire) != 0 ||
-		wait_for_worker_state(&scheduler->workers[0],
-							  CROUTINE_WORKER_SOURCE_WAITING) != 0 ||
-		atomic_load_explicit(&scheduler->waiting_workers,
-							 memory_order_acquire) != 1)
+		wait_for_worker_state(&scheduler->workers[0], CROUTINE_WORKER_SOURCE_WAITING) != 0 ||
+		atomic_load_explicit(&scheduler->waiting_workers, memory_order_acquire) != 1)
 		goto out_stop;
 
-	if (croutine_scheduler_stop(scheduler) != 0 ||
-		croutine_scheduler_stop(scheduler) != 0 ||
+	if (croutine_scheduler_stop(scheduler) != 0 || croutine_scheduler_stop(scheduler) != 0 ||
 		croutine_spawn(scheduler, state_task, &context) != -1 ||
-		atomic_load_explicit(&scheduler->state, memory_order_acquire) !=
-			CROUTINE_SCHEDULER_STOPPED ||
-		atomic_load_explicit(&scheduler->workers[0].state,
-							 memory_order_acquire) != CROUTINE_WORKER_SUSPENDED ||
-		atomic_load_explicit(&scheduler->waiting_workers,
-							 memory_order_acquire) != 0)
+		atomic_load_explicit(&scheduler->state, memory_order_acquire) != CROUTINE_SCHEDULER_STOPPED ||
+		atomic_load_explicit(&scheduler->workers[0].state, memory_order_acquire) != CROUTINE_WORKER_SUSPENDED ||
+		atomic_load_explicit(&scheduler->waiting_workers, memory_order_acquire) != 0)
 		goto out_stop;
 
-	if (scheduler->workers[0].main_event_source->wake(
-			scheduler->workers[0].main_event_source) != 0)
+	if (scheduler->workers[0].main_event_source->wake(scheduler->workers[0].main_event_source) != 0)
 		goto out_stop;
 	{
 		struct timespec pause = { .tv_nsec = 10 * WAIT_NS };
 
 		nanosleep(&pause, NULL);
 	}
-	if (atomic_load_explicit(&scheduler->workers[0].state,
-							 memory_order_acquire) != CROUTINE_WORKER_SUSPENDED)
+	if (atomic_load_explicit(&scheduler->workers[0].state, memory_order_acquire) != CROUTINE_WORKER_SUSPENDED)
 		goto out_stop;
 
 	for (size_t round = 0; round < LIFECYCLE_ROUNDS; round++) {
-		if (croutine_scheduler_start(scheduler) != 0 ||
-			croutine_scheduler_stop(scheduler) != 0 ||
-			atomic_load_explicit(&scheduler->workers[0].state,
-								 memory_order_acquire) !=
-				CROUTINE_WORKER_SUSPENDED ||
-			atomic_load_explicit(&scheduler->waiting_workers,
-								 memory_order_acquire) != 0)
+		if (croutine_scheduler_start(scheduler) != 0 || croutine_scheduler_stop(scheduler) != 0 ||
+			atomic_load_explicit(&scheduler->workers[0].state, memory_order_acquire) != CROUTINE_WORKER_SUSPENDED ||
+			atomic_load_explicit(&scheduler->waiting_workers, memory_order_acquire) != 0)
 			goto out_stop;
 	}
 	status = 0;

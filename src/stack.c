@@ -7,9 +7,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-
-static int croutine_stack_align_size(size_t size, size_t page_size,
-									 size_t *aligned) {
+static int croutine_stack_align_size(size_t size, size_t page_size, size_t *aligned) {
 	size_t mask;
 
 	if (size == 0 || page_size == 0 || aligned == NULL)
@@ -36,8 +34,7 @@ struct croutine_stack *croutine_stack_alloc(size_t size) {
 		return CROUTINE_STACK_ERROR;
 	page_size = (size_t)sys_page_size;
 
-	if (croutine_stack_align_size(size, page_size, &aligned_size) != 0 ||
-		aligned_size > SIZE_MAX - page_size)
+	if (croutine_stack_align_size(size, page_size, &aligned_size) != 0 || aligned_size > SIZE_MAX - page_size)
 		return CROUTINE_STACK_ERROR;
 	mapping_size = page_size + aligned_size;
 
@@ -45,8 +42,7 @@ struct croutine_stack *croutine_stack_alloc(size_t size) {
 	if (stack == NULL)
 		return CROUTINE_STACK_ERROR;
 
-	mapping = mmap(NULL, mapping_size, PROT_READ | PROT_WRITE,
-				   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	mapping = mmap(NULL, mapping_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (mapping == MAP_FAILED) {
 		free(stack);
 		return CROUTINE_STACK_ERROR;

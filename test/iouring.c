@@ -106,8 +106,7 @@ static int iouring_signal_eventfd(int fd) {
 	return -1;
 }
 
-static struct iouring_source *
-iouring_source_from_base(croutine_main_event_source *source) {
+static struct iouring_source *iouring_source_from_base(croutine_main_event_source *source) {
 	return (struct iouring_source *)source;
 }
 
@@ -136,31 +135,25 @@ static void iouring_collect(croutine_main_event_source *base) {
 		struct iouring_op *op = io_uring_cqe_get_data(cqe);
 
 		if (op == NULL) {
-			atomic_store_explicit(&source->stats->failed, 1,
-								  memory_order_release);
+			atomic_store_explicit(&source->stats->failed, 1, memory_order_release);
 			io_uring_cqe_seen(&source->ring, cqe);
 			continue;
 		}
 
 		op->res = cqe->res;
 		if (source->inflight == 0)
-			atomic_store_explicit(&source->stats->failed, 1,
-								  memory_order_release);
+			atomic_store_explicit(&source->stats->failed, 1, memory_order_release);
 		else
 			source->inflight--;
-		atomic_fetch_add_explicit(&source->stats->completed, 1,
-								  memory_order_acq_rel);
-		atomic_fetch_add_explicit(&source->stats->recv_ops, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&source->stats->completed, 1, memory_order_acq_rel);
+		atomic_fetch_add_explicit(&source->stats->recv_ops, 1, memory_order_acq_rel);
 		if (croutine_wait_handle_wake(&op->handle) != 0)
-			atomic_store_explicit(&source->stats->failed, 1,
-								  memory_order_release);
+			atomic_store_explicit(&source->stats->failed, 1, memory_order_release);
 		io_uring_cqe_seen(&source->ring, cqe);
 	}
 }
 
-static enum croutine_main_event_wait_result
-iouring_blocking_wait(croutine_main_event_source *base) {
+static enum croutine_main_event_wait_result iouring_blocking_wait(croutine_main_event_source *base) {
 	struct iouring_source *source = iouring_source_from_base(base);
 	struct pollfd fds[2];
 	int ret;
@@ -213,8 +206,7 @@ static void iouring_suspend(croutine_main_event_source *base) {
 static void iouring_resume(croutine_main_event_source *base) {
 	struct iouring_source *source = iouring_source_from_base(base);
 
-	if (source == NULL ||
-		iouring_signal_eventfd(source->resume_eventfd) != 0)
+	if (source == NULL || iouring_signal_eventfd(source->resume_eventfd) != 0)
 		abort();
 }
 
@@ -236,8 +228,7 @@ static void iouring_destroy(croutine_main_event_source *base) {
 	free(source);
 }
 
-static croutine_main_event_source *
-iouring_source_factory(croutine_worker *worker, void *args) {
+static croutine_main_event_source *iouring_source_factory(croutine_worker *worker, void *args) {
 	struct iouring_stats *stats = args;
 	struct iouring_source *source;
 	int ret;
@@ -297,8 +288,7 @@ static int iouring_submit_current(struct iouring_source *source) {
 	int ret;
 
 	source->inflight++;
-	atomic_fetch_add_explicit(&source->stats->submitted, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&source->stats->submitted, 1, memory_order_acq_rel);
 	ret = io_uring_submit(&source->ring);
 	if (ret < 1) {
 		source->inflight--;
@@ -389,15 +379,13 @@ static void *receiver_task(void *arg) {
 
 		nread = iouring_async_recv(receiver->socket_fd, &value, sizeof(value));
 		if (nread != (ssize_t)sizeof(value)) {
-			fprintf(stderr, "iouring udp recv failed at %zu: %zd\n", index,
-					nread);
+			fprintf(stderr, "iouring udp recv failed at %zu: %zd\n", index, nread);
 			atomic_store_explicit(&receiver->failed, 1, memory_order_release);
 			return NULL;
 		}
 
 		atomic_fetch_add_explicit(&receiver->received, 1, memory_order_acq_rel);
-		printf("iouring udp recv %02zu 0x%016llx\n", index,
-			   (unsigned long long)value);
+		printf("iouring udp recv %02zu 0x%016llx\n", index, (unsigned long long)value);
 	}
 
 	atomic_store_explicit(&receiver->done, 1, memory_order_release);
@@ -423,8 +411,7 @@ static void *sender_main(void *arg) {
 		uint64_t value = random_step(&random);
 		ssize_t written;
 
-		written = sendto(fd, &value, sizeof(value), 0, (struct sockaddr *)&addr,
-						 sizeof(addr));
+		written = sendto(fd, &value, sizeof(value), 0, (struct sockaddr *)&addr, sizeof(addr));
 		if (written != (ssize_t)sizeof(value)) {
 			if (written < 0 && errno == EINTR)
 				continue;
@@ -449,8 +436,7 @@ static int iouring_available(void) {
 
 	ret = io_uring_queue_init(2, &ring, 0);
 	if (ret < 0) {
-		fprintf(stderr, "io_uring unavailable, skipping test: %s\n",
-				strerror(-ret));
+		fprintf(stderr, "io_uring unavailable, skipping test: %s\n", strerror(-ret));
 		return 0;
 	}
 	io_uring_queue_exit(&ring);
@@ -549,14 +535,10 @@ int main(void) {
 		fprintf(stderr, "iouring UDP test failed\n");
 		status = 1;
 	}
-	if (atomic_load_explicit(&receiver.received, memory_order_acquire) !=
-			IOURING_UDP_PACKETS ||
-		atomic_load_explicit(&stats.submitted, memory_order_acquire) !=
-			IOURING_UDP_PACKETS ||
-		atomic_load_explicit(&stats.completed, memory_order_acquire) !=
-			IOURING_UDP_PACKETS ||
-		atomic_load_explicit(&stats.recv_ops, memory_order_acquire) !=
-			IOURING_UDP_PACKETS) {
+	if (atomic_load_explicit(&receiver.received, memory_order_acquire) != IOURING_UDP_PACKETS ||
+		atomic_load_explicit(&stats.submitted, memory_order_acquire) != IOURING_UDP_PACKETS ||
+		atomic_load_explicit(&stats.completed, memory_order_acquire) != IOURING_UDP_PACKETS ||
+		atomic_load_explicit(&stats.recv_ops, memory_order_acquire) != IOURING_UDP_PACKETS) {
 		fprintf(stderr, "iouring UDP stats mismatch\n");
 		status = 1;
 	}

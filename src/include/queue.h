@@ -35,7 +35,8 @@ static inline struct croutine_mpmc_queue_item *croutine_mpmc_queue_at(struct cro
 }
 
 static inline struct croutine_mpmc_queue *croutine_mpmc_queue_init(size_t capacity) {
-	if (capacity < 2 || (capacity & (capacity - 1)) != 0 || capacity > (UINT64_MAX >> 1) || capacity > (SIZE_MAX / sizeof(croutine_mpmc_queue_item)))
+	if (capacity < 2 || (capacity & (capacity - 1)) != 0 || capacity > (UINT64_MAX >> 1) ||
+		capacity > (SIZE_MAX / sizeof(croutine_mpmc_queue_item)))
 		return NULL;
 
 	struct croutine_mpmc_queue_item *cells = malloc(sizeof(croutine_mpmc_queue_item) * capacity);
@@ -82,7 +83,8 @@ static inline int croutine_mpmc_queue_push(struct croutine_mpmc_queue *queue, vo
 		uint64_t seq = atomic_load_explicit(&item->sequence, memory_order_acquire);
 
 		if (SEQ64_EQ(seq, pos)) {
-			if (atomic_compare_exchange_weak_explicit(&queue->head, &pos, pos + 1, memory_order_relaxed, memory_order_relaxed)) {
+			if (atomic_compare_exchange_weak_explicit(&queue->head, &pos, pos + 1, memory_order_relaxed,
+													  memory_order_relaxed)) {
 				break;
 			}
 		} else if (SEQ64_BEFORE(seq, pos)) {
@@ -109,7 +111,8 @@ static inline void *croutine_mpmc_queue_pop(struct croutine_mpmc_queue *queue) {
 		uint64_t seq = atomic_load_explicit(&item->sequence, memory_order_acquire);
 
 		if (SEQ64_EQ(seq, pos + 1)) {
-			if (atomic_compare_exchange_weak_explicit(&queue->tail, &pos, pos + 1, memory_order_relaxed, memory_order_relaxed)) {
+			if (atomic_compare_exchange_weak_explicit(&queue->tail, &pos, pos + 1, memory_order_relaxed,
+													  memory_order_relaxed)) {
 				break;
 			}
 		} else if (SEQ64_BEFORE(seq, pos + 1)) {
@@ -156,7 +159,8 @@ static inline _Atomic(void *) *croutine_cldeque_at(struct croutine_cldeque *dequ
 static inline struct croutine_cldeque *croutine_cldeque_init(size_t capacity) {
 	_Atomic(void *) *items;
 
-	if (capacity < 2 || (capacity & (capacity - 1)) != 0 || capacity > (UINT64_MAX >> 1) || capacity > (SIZE_MAX / sizeof(*items)))
+	if (capacity < 2 || (capacity & (capacity - 1)) != 0 || capacity > (UINT64_MAX >> 1) ||
+		capacity > (SIZE_MAX / sizeof(*items)))
 		return NULL;
 
 	items = malloc(sizeof(*items) * capacity);
@@ -222,7 +226,8 @@ static inline void *croutine_cldeque_pop(struct croutine_cldeque *deque) {
 	void *res = atomic_load_explicit(croutine_cldeque_at(deque, tail), memory_order_relaxed);
 
 	if (SEQ64_EQ(head, tail)) {
-		if (!atomic_compare_exchange_strong_explicit(&deque->head, &head, head + 1, memory_order_seq_cst, memory_order_relaxed))
+		if (!atomic_compare_exchange_strong_explicit(&deque->head, &head, head + 1, memory_order_seq_cst,
+													 memory_order_relaxed))
 			res = NULL;
 		atomic_store_explicit(&deque->tail, tail + 1, memory_order_relaxed);
 	}
@@ -241,7 +246,8 @@ static inline void *croutine_cldeque_steal(struct croutine_cldeque *deque) {
 
 	void *res = atomic_load_explicit(croutine_cldeque_at(deque, head), memory_order_relaxed);
 
-	if (!atomic_compare_exchange_strong_explicit(&deque->head, &head, head + 1, memory_order_seq_cst, memory_order_relaxed))
+	if (!atomic_compare_exchange_strong_explicit(&deque->head, &head, head + 1, memory_order_seq_cst,
+												 memory_order_relaxed))
 		return NULL;
 	return res;
 }

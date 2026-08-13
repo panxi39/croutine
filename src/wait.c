@@ -5,10 +5,8 @@
 #include <stdatomic.h>
 #include <string.h>
 
-static void croutine_wait_handle_init(struct croutine_wait_handle *handle,
-									  struct croutine_task *task,
-									  enum croutine_wait_handle_type type,
-									  void *data, int (*checker)(void *data)) {
+static void croutine_wait_handle_init(struct croutine_wait_handle *handle, struct croutine_task *task,
+									  enum croutine_wait_handle_type type, void *data, int (*checker)(void *data)) {
 	memset(handle, 0, sizeof(*handle));
 	croutine_refcount_init(&handle->refcount);
 	handle->scheduler = task != NULL ? task->scheduler : NULL;
@@ -19,25 +17,21 @@ static void croutine_wait_handle_init(struct croutine_wait_handle *handle,
 	handle->checker = checker;
 }
 
-int croutine_wait_handle_init_default(struct croutine_wait_handle *handle,
-									  struct croutine_task *task, void *data,
+int croutine_wait_handle_init_default(struct croutine_wait_handle *handle, struct croutine_task *task, void *data,
 									  int (*checker)(void *data)) {
 	if (handle == NULL || task == NULL)
 		return -1;
 
-	croutine_wait_handle_init(handle, task, CROUTINE_WAIT_HANDLE_SIMPLE, data,
-							  checker);
+	croutine_wait_handle_init(handle, task, CROUTINE_WAIT_HANDLE_SIMPLE, data, checker);
 	return 0;
 }
 
-int croutine_wait_handle_init_complex(struct croutine_wait_handle *handle,
-									  struct croutine_task *task, uint32_t refs,
+int croutine_wait_handle_init_complex(struct croutine_wait_handle *handle, struct croutine_task *task, uint32_t refs,
 									  void *data, int (*checker)(void *data)) {
 	if (handle == NULL || task == NULL || refs == 0)
 		return -1;
 
-	croutine_wait_handle_init(handle, task, CROUTINE_WAIT_HANDLE_COMPLEX, data,
-							  checker);
+	croutine_wait_handle_init(handle, task, CROUTINE_WAIT_HANDLE_COMPLEX, data, checker);
 	atomic_store_explicit(&handle->refcount.refs, refs, memory_order_release);
 	return 0;
 }
@@ -49,22 +43,18 @@ int croutine_wait_handle_wake(croutine_wait_handle *handle) {
 		return -1;
 
 	expected = CROUTINE_WAIT_HANDLE_PENDING;
-	if (!atomic_compare_exchange_strong_explicit(
-			&handle->state, &expected, CROUTINE_WAIT_HANDLE_PROCESSING,
-			memory_order_acq_rel, memory_order_acquire))
+	if (!atomic_compare_exchange_strong_explicit(&handle->state, &expected, CROUTINE_WAIT_HANDLE_PROCESSING,
+												 memory_order_acq_rel, memory_order_acquire))
 		return -1;
 
 	if (handle->checker != NULL && handle->checker(handle->data) != 1) {
-		atomic_store_explicit(&handle->state, CROUTINE_WAIT_HANDLE_PENDING,
-							  memory_order_release);
+		atomic_store_explicit(&handle->state, CROUTINE_WAIT_HANDLE_PENDING, memory_order_release);
 		return -1;
 	}
 
-	atomic_store_explicit(&handle->state, CROUTINE_WAIT_HANDLE_FINISHED,
-						  memory_order_release);
+	atomic_store_explicit(&handle->state, CROUTINE_WAIT_HANDLE_FINISHED, memory_order_release);
 	if (croutine_task_wake(handle->task) != 0) {
-		atomic_store_explicit(&handle->state, CROUTINE_WAIT_HANDLE_PENDING,
-							  memory_order_release);
+		atomic_store_explicit(&handle->state, CROUTINE_WAIT_HANDLE_PENDING, memory_order_release);
 		return -1;
 	}
 

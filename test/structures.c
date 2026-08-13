@@ -41,41 +41,30 @@ static int test_refcount(void) {
 	struct refcount_test_node node = { 0 };
 
 	croutine_refcount_init(&node.refs);
-	CHECK(croutine_refcount_read(&node.refs) == 1,
-		  "refcount should initialize to one");
+	CHECK(croutine_refcount_read(&node.refs) == 1, "refcount should initialize to one");
 	CHECK(node.released == 0, "refcount init should not release object");
 
-	CHECK(croutine_refcount_get(&node.refs) == 0,
-		  "refcount get should acquire a live reference");
-	CHECK(croutine_refcount_read(&node.refs) == 2,
-		  "refcount get should increment count");
+	CHECK(croutine_refcount_get(&node.refs) == 0, "refcount get should acquire a live reference");
+	CHECK(croutine_refcount_read(&node.refs) == 2, "refcount get should increment count");
 
 	CHECK(croutine_refcount_release(&node.refs, refcount_test_release) == 0,
 		  "first refcount release should not release object");
-	CHECK(croutine_refcount_read(&node.refs) == 1,
-		  "refcount should decrement after release");
-	CHECK(node.released == 0,
-		  "object should not release while refcount remains nonzero");
+	CHECK(croutine_refcount_read(&node.refs) == 1, "refcount should decrement after release");
+	CHECK(node.released == 0, "object should not release while refcount remains nonzero");
 
-	CHECK(croutine_refcount_get(&node.refs) == 0,
-		  "refcount get should acquire a live reference");
-	CHECK(croutine_refcount_read(&node.refs) == 2,
-		  "refcount get should increment live refcount");
+	CHECK(croutine_refcount_get(&node.refs) == 0, "refcount get should acquire a live reference");
+	CHECK(croutine_refcount_read(&node.refs) == 2, "refcount get should increment live refcount");
 
 	CHECK(croutine_refcount_release(&node.refs, refcount_test_release) == 0,
 		  "release after get should not release with one ref left");
 	CHECK(croutine_refcount_release(&node.refs, refcount_test_release) == 1,
 		  "final refcount release should release object");
-	CHECK(croutine_refcount_read(&node.refs) == 0,
-		  "final release should leave refcount at zero");
+	CHECK(croutine_refcount_read(&node.refs) == 0, "final release should leave refcount at zero");
 	CHECK(node.released == 1, "release callback should run exactly once");
 
-	CHECK(croutine_refcount_get(&node.refs) == -1,
-		  "refcount get should reject a dead object");
-	CHECK(croutine_refcount_read(&node.refs) == 0,
-		  "failed get should not change zero refcount");
-	CHECK(croutine_refcount_release(&node.refs, refcount_test_release) == -1,
-		  "release on zero refcount should fail");
+	CHECK(croutine_refcount_get(&node.refs) == -1, "refcount get should reject a dead object");
+	CHECK(croutine_refcount_read(&node.refs) == 0, "failed get should not change zero refcount");
+	CHECK(croutine_refcount_release(&node.refs, refcount_test_release) == -1, "release on zero refcount should fail");
 	CHECK(node.released == 1, "failed release should not release object again");
 
 	return 0;
@@ -105,20 +94,16 @@ static int test_list(void) {
 	croutine_list_for_each(pos, &head) {
 		struct list_test_node *node;
 
-		CHECK(index < sizeof(expected) / sizeof(expected[0]),
-			  "list contains too many nodes");
+		CHECK(index < sizeof(expected) / sizeof(expected[0]), "list contains too many nodes");
 		node = croutine_list_entry(pos, struct list_test_node, link);
 		CHECK(node->value == expected[index], "list iteration order is wrong");
 		index++;
 	}
-	CHECK(index == sizeof(expected) / sizeof(expected[0]),
-		  "list contains too few nodes");
+	CHECK(index == sizeof(expected) / sizeof(expected[0]), "list contains too few nodes");
 
 	croutine_list_remove(&first.link);
-	CHECK(first.link.next == &first.link,
-		  "removed node next should point to itself");
-	CHECK(first.link.prev == &first.link,
-		  "removed node prev should point to itself");
+	CHECK(first.link.next == &first.link, "removed node next should point to itself");
+	CHECK(first.link.prev == &first.link, "removed node prev should point to itself");
 
 	index = 0;
 	croutine_list_for_each_safe(pos, tmp, &head) {

@@ -251,8 +251,7 @@ struct load_sampler_summary {
  * Common test utilities
  */
 
-static int timespec_cmp(const struct timespec *left,
-						const struct timespec *right) {
+static int timespec_cmp(const struct timespec *left, const struct timespec *right) {
 	if (left->tv_sec < right->tv_sec)
 		return -1;
 	if (left->tv_sec > right->tv_sec)
@@ -273,8 +272,7 @@ static void add_microseconds(struct timespec *time, long microseconds) {
 	}
 }
 
-static uint64_t timespec_diff_us(const struct timespec *end,
-								 const struct timespec *start) {
+static uint64_t timespec_diff_us(const struct timespec *end, const struct timespec *start) {
 	time_t sec;
 	long nsec;
 
@@ -361,8 +359,7 @@ static struct timer_wait *timer_wait_alloc(struct allocation_stats *allocs) {
 
 	if (wait != NULL) {
 		wait->allocs = allocs;
-		atomic_fetch_add_explicit(&allocs->timer_wait_allocs, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&allocs->timer_wait_allocs, 1, memory_order_acq_rel);
 	}
 	return wait;
 }
@@ -371,19 +368,16 @@ static void timer_wait_free(struct timer_wait *wait) {
 	if (wait == NULL)
 		return;
 
-	atomic_fetch_add_explicit(&wait->allocs->timer_wait_frees, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&wait->allocs->timer_wait_frees, 1, memory_order_acq_rel);
 	free(wait);
 }
 
-static struct external_wait *
-external_wait_alloc(struct allocation_stats *allocs) {
+static struct external_wait *external_wait_alloc(struct allocation_stats *allocs) {
 	struct external_wait *wait = calloc(1, sizeof(*wait));
 
 	if (wait != NULL) {
 		wait->allocs = allocs;
-		atomic_fetch_add_explicit(&allocs->external_wait_allocs, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&allocs->external_wait_allocs, 1, memory_order_acq_rel);
 	}
 	return wait;
 }
@@ -392,8 +386,7 @@ static void external_wait_free(struct external_wait *wait) {
 	if (wait == NULL)
 		return;
 
-	atomic_fetch_add_explicit(&wait->allocs->external_wait_frees, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&wait->allocs->external_wait_frees, 1, memory_order_acq_rel);
 	free(wait);
 }
 
@@ -428,13 +421,11 @@ static int external_deadline_checker(void *data) {
 	return timespec_cmp(&now, &wait->deadline) >= 0;
 }
 
-static struct timer_source *
-timer_source_from_base(croutine_main_event_source *source) {
+static struct timer_source *timer_source_from_base(croutine_main_event_source *source) {
 	return (struct timer_source *)source;
 }
 
-static void timer_source_insert_wait(struct timer_source *timer,
-									 struct timer_wait *wait) {
+static void timer_source_insert_wait(struct timer_source *timer, struct timer_wait *wait) {
 	croutine_list_head *pos;
 
 	croutine_list_for_each(pos, &timer->waits) {
@@ -452,42 +443,36 @@ static void timer_source_insert_wait(struct timer_source *timer,
 	atomic_store_explicit(&wait->queued, 1, memory_order_release);
 }
 
-static int timer_source_add_wait(struct timer_source *timer,
-								 struct timer_wait *wait) {
+static int timer_source_add_wait(struct timer_source *timer, struct timer_wait *wait) {
 	if (timer == NULL || wait == NULL)
 		return -1;
 
 	pthread_mutex_lock(&timer->lock);
 	timer_source_insert_wait(timer, wait);
-	atomic_fetch_add_explicit(&timer->stats->registered, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&timer->stats->registered, 1, memory_order_acq_rel);
 	timer->work_pending = 1;
 	pthread_cond_signal(&timer->work_cond);
 	pthread_mutex_unlock(&timer->lock);
 	return 0;
 }
 
-static enum croutine_main_event_wait_result
-timer_source_blocking_wait(croutine_main_event_source *source) {
+static enum croutine_main_event_wait_result timer_source_blocking_wait(croutine_main_event_source *source) {
 	struct timer_source *timer = timer_source_from_base(source);
 	int ret = 0;
 
-	atomic_fetch_add_explicit(&timer->stats->blocking_waits, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&timer->stats->blocking_waits, 1, memory_order_acq_rel);
 
 	pthread_mutex_lock(&timer->lock);
 	if (timer->work_pending) {
 		timer->work_pending = 0;
-		atomic_fetch_add_explicit(&timer->stats->wake_interrupts, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&timer->stats->wake_interrupts, 1, memory_order_acq_rel);
 		log_event("timer %zu blocking_wait interrupted by wake", timer->id);
 		pthread_mutex_unlock(&timer->lock);
 		return CROUTINE_MAIN_EVENT_WAIT_DONE;
 	}
 
 	if (croutine_list_empty(&timer->waits)) {
-		atomic_fetch_add_explicit(&timer->stats->idle_waits, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&timer->stats->idle_waits, 1, memory_order_acq_rel);
 		log_event("timer %zu blocking_wait idle", timer->id);
 		while (!timer->work_pending && croutine_list_empty(&timer->waits))
 			(void)pthread_cond_wait(&timer->work_cond, &timer->lock);
@@ -498,25 +483,18 @@ timer_source_blocking_wait(croutine_main_event_source *source) {
 
 		wait = croutine_list_entry(timer->waits.next, struct timer_wait, node);
 		clock_gettime(CLOCK_REALTIME, &now);
-		wait_us = timespec_cmp(&wait->deadline, &now) > 0 ?
-					  timespec_diff_us(&wait->deadline, &now) :
-					  0;
-		atomic_fetch_add_explicit(&timer->stats->timed_waits, 1,
-								  memory_order_acq_rel);
-		log_event("timer %zu blocking_wait task %zu wait %zu in %.2fms",
-				  timer->id, wait->task_id, wait->wait_no,
+		wait_us = timespec_cmp(&wait->deadline, &now) > 0 ? timespec_diff_us(&wait->deadline, &now) : 0;
+		atomic_fetch_add_explicit(&timer->stats->timed_waits, 1, memory_order_acq_rel);
+		log_event("timer %zu blocking_wait task %zu wait %zu in %.2fms", timer->id, wait->task_id, wait->wait_no,
 				  (double)wait_us / 1000.0);
-		ret = pthread_cond_timedwait(&timer->work_cond, &timer->lock,
-									 &wait->deadline);
+		ret = pthread_cond_timedwait(&timer->work_cond, &timer->lock, &wait->deadline);
 	}
 
 	if (ret == ETIMEDOUT) {
-		atomic_fetch_add_explicit(&timer->stats->blocking_timeouts, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&timer->stats->blocking_timeouts, 1, memory_order_acq_rel);
 		log_event("timer %zu blocking_wait deadline reached", timer->id);
 	} else if (ret == 0) {
-		atomic_fetch_add_explicit(&timer->stats->wake_interrupts, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&timer->stats->wake_interrupts, 1, memory_order_acq_rel);
 		log_event("timer %zu blocking_wait signaled", timer->id);
 	} else {
 		atomic_store_explicit(&timer->stats->failed, 1, memory_order_release);
@@ -561,21 +539,17 @@ static void timer_source_collect(croutine_main_event_source *source) {
 		late_us = timespec_diff_us(&now, &wait->deadline);
 		croutine_list_remove(&wait->node);
 		atomic_store_explicit(&wait->queued, 0, memory_order_release);
-		atomic_fetch_add_explicit(&timer->stats->expired, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&timer->stats->expired, 1, memory_order_acq_rel);
 		pthread_mutex_unlock(&timer->lock);
 
-		log_event("timer %zu collect task %zu wait %zu late %.2fms", timer->id,
-				  task_id, wait_no, (double)late_us / 1000.0);
+		log_event("timer %zu collect task %zu wait %zu late %.2fms", timer->id, task_id, wait_no,
+				  (double)late_us / 1000.0);
 		wake_result = croutine_wait_handle_wake(&wait->handle);
 		if (wake_result != 0) {
-			fprintf(stderr, "timer %zu failed to wake task %zu wait %zu\n",
-					timer->id, task_id, wait_no);
-			atomic_store_explicit(&timer->stats->failed, 1,
-								  memory_order_release);
+			fprintf(stderr, "timer %zu failed to wake task %zu wait %zu\n", timer->id, task_id, wait_no);
+			atomic_store_explicit(&timer->stats->failed, 1, memory_order_release);
 		} else {
-			atomic_fetch_add_explicit(&timer->stats->local_wakes, 1,
-									  memory_order_acq_rel);
+			atomic_fetch_add_explicit(&timer->stats->local_wakes, 1, memory_order_acq_rel);
 		}
 	}
 }
@@ -623,14 +597,12 @@ static void timer_source_destroy(croutine_main_event_source *source) {
 		wait = croutine_list_entry(pos, struct timer_wait, node);
 		croutine_list_remove(&wait->node);
 		atomic_store_explicit(&wait->queued, 0, memory_order_release);
-		atomic_fetch_add_explicit(&timer->stats->drained, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&timer->stats->drained, 1, memory_order_acq_rel);
 		timer_wait_free(wait);
 	}
 	pthread_mutex_unlock(&timer->lock);
 
-	atomic_fetch_add_explicit(&timer->stats->destroyed, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&timer->stats->destroyed, 1, memory_order_acq_rel);
 	log_event("timer %zu destroy", timer->id);
 	pthread_cond_destroy(&timer->resume_cond);
 	pthread_cond_destroy(&timer->work_cond);
@@ -638,8 +610,7 @@ static void timer_source_destroy(croutine_main_event_source *source) {
 	free(timer);
 }
 
-static croutine_main_event_source *timer_source_factory(croutine_worker *worker,
-														void *args) {
+static croutine_main_event_source *timer_source_factory(croutine_worker *worker, void *args) {
 	struct timer_source_stats *stats = args;
 	struct timer_source *timer;
 
@@ -649,8 +620,7 @@ static croutine_main_event_source *timer_source_factory(croutine_worker *worker,
 
 	timer->stats = stats;
 	timer->worker = worker;
-	timer->id =
-		atomic_fetch_add_explicit(&stats->next_id, 1, memory_order_acq_rel);
+	timer->id = atomic_fetch_add_explicit(&stats->next_id, 1, memory_order_acq_rel);
 	timer->base.blocking_wait = timer_source_blocking_wait;
 	timer->base.collect = timer_source_collect;
 	timer->base.wake = timer_source_wake;
@@ -679,8 +649,7 @@ fail:
 	return NULL;
 }
 
-static void external_source_insert_wait(struct external_source *source,
-										struct external_wait *wait) {
+static void external_source_insert_wait(struct external_source *source, struct external_wait *wait) {
 	croutine_list_head *pos;
 
 	croutine_list_for_each(pos, &source->waits) {
@@ -698,22 +667,19 @@ static void external_source_insert_wait(struct external_source *source,
 	atomic_store_explicit(&wait->queued, 1, memory_order_release);
 }
 
-static int external_source_add_wait(struct external_source *source,
-									struct external_wait *wait) {
+static int external_source_add_wait(struct external_source *source, struct external_wait *wait) {
 	if (source == NULL || wait == NULL)
 		return -1;
 
 	pthread_mutex_lock(&source->lock);
 	external_source_insert_wait(source, wait);
-	atomic_fetch_add_explicit(&source->stats->registered, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&source->stats->registered, 1, memory_order_acq_rel);
 	pthread_cond_signal(&source->cond);
 	pthread_mutex_unlock(&source->lock);
 	return 0;
 }
 
-static int external_source_init(struct external_source *source,
-								struct external_source_stats *stats) {
+static int external_source_init(struct external_source *source, struct external_source_stats *stats) {
 	source->stats = stats;
 	source->stopping = 0;
 	croutine_list_init(&source->waits);
@@ -744,8 +710,7 @@ static void external_source_destroy(struct external_source *source) {
 		wait = croutine_list_entry(pos, struct external_wait, node);
 		croutine_list_remove(&wait->node);
 		atomic_store_explicit(&wait->queued, 0, memory_order_release);
-		atomic_fetch_add_explicit(&source->stats->drained, 1,
-								  memory_order_acq_rel);
+		atomic_fetch_add_explicit(&source->stats->drained, 1, memory_order_acq_rel);
 		(void)external_wait_put(wait);
 		(void)external_wait_put(wait);
 	}
@@ -771,30 +736,20 @@ static void *external_source_main(void *arg) {
 			return NULL;
 		}
 
-		wait =
-			croutine_list_entry(source->waits.next, struct external_wait, node);
-		if (!atomic_load_explicit(&wait->early_attempted,
-								  memory_order_acquire)) {
+		wait = croutine_list_entry(source->waits.next, struct external_wait, node);
+		if (!atomic_load_explicit(&wait->early_attempted, memory_order_acquire)) {
 			clock_gettime(CLOCK_REALTIME, &now);
 			if (timespec_cmp(&wait->deadline, &now) > 0 &&
-				timespec_diff_us(&wait->deadline, &now) >
-					EXTERNAL_EARLY_WAKE_MIN_US) {
-				atomic_store_explicit(&wait->early_attempted, 1,
-									  memory_order_release);
+				timespec_diff_us(&wait->deadline, &now) > EXTERNAL_EARLY_WAKE_MIN_US) {
+				atomic_store_explicit(&wait->early_attempted, 1, memory_order_release);
 				pthread_mutex_unlock(&source->lock);
 				ret = croutine_wait_handle_wake(&wait->handle);
 				if (ret == -1) {
-					atomic_fetch_add_explicit(&source->stats->early_rejected, 1,
-											  memory_order_acq_rel);
-					log_event("external early wake rejected task %zu wait %zu",
-							  wait->task_id, wait->wait_no);
+					atomic_fetch_add_explicit(&source->stats->early_rejected, 1, memory_order_acq_rel);
+					log_event("external early wake rejected task %zu wait %zu", wait->task_id, wait->wait_no);
 				} else {
-					fprintf(
-						stderr,
-						"external early wake unexpectedly succeeded task %zu\n",
-						wait->task_id);
-					atomic_store_explicit(&source->stats->failed, 1,
-										  memory_order_release);
+					fprintf(stderr, "external early wake unexpectedly succeeded task %zu\n", wait->task_id);
+					atomic_store_explicit(&source->stats->failed, 1, memory_order_release);
 				}
 				continue;
 			}
@@ -802,14 +757,11 @@ static void *external_source_main(void *arg) {
 
 		clock_gettime(CLOCK_REALTIME, &now);
 		if (timespec_cmp(&wait->deadline, &now) > 0) {
-			atomic_fetch_add_explicit(&source->stats->timed_waits, 1,
-									  memory_order_acq_rel);
-			ret = pthread_cond_timedwait(&source->cond, &source->lock,
-										 &wait->deadline);
+			atomic_fetch_add_explicit(&source->stats->timed_waits, 1, memory_order_acq_rel);
+			ret = pthread_cond_timedwait(&source->cond, &source->lock, &wait->deadline);
 			pthread_mutex_unlock(&source->lock);
 			if (ret != 0 && ret != ETIMEDOUT)
-				atomic_store_explicit(&source->stats->failed, 1,
-									  memory_order_release);
+				atomic_store_explicit(&source->stats->failed, 1, memory_order_release);
 			continue;
 		}
 
@@ -819,30 +771,23 @@ static void *external_source_main(void *arg) {
 
 		ret = croutine_wait_handle_wake(&wait->handle);
 		if (ret == 0) {
-			atomic_fetch_add_explicit(&source->stats->successful_wakes, 1,
-									  memory_order_acq_rel);
-			log_event("external wake task %zu wait %zu", wait->task_id,
-					  wait->wait_no);
+			atomic_fetch_add_explicit(&source->stats->successful_wakes, 1, memory_order_acq_rel);
+			log_event("external wake task %zu wait %zu", wait->task_id, wait->wait_no);
 		} else {
-			fprintf(stderr, "external wake failed task %zu wait %zu\n",
-					wait->task_id, wait->wait_no);
-			atomic_store_explicit(&source->stats->failed, 1,
-								  memory_order_release);
+			fprintf(stderr, "external wake failed task %zu wait %zu\n", wait->task_id, wait->wait_no);
+			atomic_store_explicit(&source->stats->failed, 1, memory_order_release);
 		}
 
 		ret = croutine_wait_handle_wake(&wait->handle);
 		if (ret == -1) {
-			atomic_fetch_add_explicit(&source->stats->duplicate_rejected, 1,
-									  memory_order_acq_rel);
+			atomic_fetch_add_explicit(&source->stats->duplicate_rejected, 1, memory_order_acq_rel);
 		} else {
 			fprintf(stderr, "external duplicate wake unexpectedly succeeded\n");
-			atomic_store_explicit(&source->stats->failed, 1,
-								  memory_order_release);
+			atomic_store_explicit(&source->stats->failed, 1, memory_order_release);
 		}
 
 		if (external_wait_put(wait) < 0)
-			atomic_store_explicit(&source->stats->failed, 1,
-								  memory_order_release);
+			atomic_store_explicit(&source->stats->failed, 1, memory_order_release);
 	}
 }
 
@@ -850,16 +795,13 @@ static void *external_source_main(void *arg) {
  * Runtime task workload
  */
 
-static void runtime_task_fail(struct runtime_task_arg *task,
-							  const char *message) {
+static void runtime_task_fail(struct runtime_task_arg *task, const char *message) {
 	fprintf(stderr, "task %zu: %s\n", task->id, message);
 	atomic_store_explicit(&task->runtime->failed, 1, memory_order_release);
 }
 
-static void update_wait_metrics(struct runtime_task_arg *task,
-								long requested_us, const struct timespec *start,
-								const struct timespec *deadline,
-								const struct timespec *now) {
+static void update_wait_metrics(struct runtime_task_arg *task, long requested_us, const struct timespec *start,
+								const struct timespec *deadline, const struct timespec *now) {
 	uint64_t elapsed_us;
 	uint64_t late_us;
 
@@ -874,8 +816,7 @@ static void update_wait_metrics(struct runtime_task_arg *task,
 		task->max_late_us = late_us;
 }
 
-static int runtime_timer_wait(struct runtime_task_arg *task,
-							  long delay_microseconds, size_t wait_no) {
+static int runtime_timer_wait(struct runtime_task_arg *task, long delay_microseconds, size_t wait_no) {
 	struct timer_source *timer;
 	struct timer_wait *wait;
 	struct timespec start;
@@ -903,8 +844,7 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 	clock_gettime(CLOCK_REALTIME, &start);
 	wait->deadline = start;
 	add_microseconds(&wait->deadline, delay_microseconds);
-	if (croutine_wait_handle_init_default(&wait->handle, current, wait,
-										  timer_deadline_checker) != 0) {
+	if (croutine_wait_handle_init_default(&wait->handle, current, wait, timer_deadline_checker) != 0) {
 		timer_wait_free(wait);
 		return -1;
 	}
@@ -914,8 +854,8 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 		return -1;
 	}
 
-	log_event("task %zu wait %zu TIMER %.2fms on timer %zu", task->id, wait_no,
-			  (double)delay_microseconds / 1000.0, timer->id);
+	log_event("task %zu wait %zu TIMER %.2fms on timer %zu", task->id, wait_no, (double)delay_microseconds / 1000.0,
+			  timer->id);
 	if (timer_source_add_wait(timer, wait) != 0) {
 		if (croutine_cancel_await() != 0)
 			abort();
@@ -924,8 +864,7 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 	}
 
 	task->timer_waits++;
-	atomic_fetch_add_explicit(&task->runtime->waits_started, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&task->runtime->waits_started, 1, memory_order_acq_rel);
 	croutine_yield();
 
 	clock_gettime(CLOCK_REALTIME, &now);
@@ -939,27 +878,22 @@ static int runtime_timer_wait(struct runtime_task_arg *task,
 		runtime_task_fail(task, "timer wait remained queued");
 		return -1;
 	}
-	if (atomic_load_explicit(&wait->handle.state, memory_order_acquire) !=
-		CROUTINE_WAIT_HANDLE_FINISHED) {
+	if (atomic_load_explicit(&wait->handle.state, memory_order_acquire) != CROUTINE_WAIT_HANDLE_FINISHED) {
 		timer_wait_free(wait);
 		runtime_task_fail(task, "timer wait handle did not finish");
 		return -1;
 	}
 
-	update_wait_metrics(task, delay_microseconds, &start, &wait->deadline,
-						&now);
-	log_event("task %zu wait %zu TIMER ready elapsed %.2fms late %.2fms",
-			  task->id, wait_no,
+	update_wait_metrics(task, delay_microseconds, &start, &wait->deadline, &now);
+	log_event("task %zu wait %zu TIMER ready elapsed %.2fms late %.2fms", task->id, wait_no,
 			  (double)timespec_diff_us(&now, &start) / 1000.0,
 			  (double)timespec_diff_us(&now, &wait->deadline) / 1000.0);
 	timer_wait_free(wait);
-	atomic_fetch_add_explicit(&task->runtime->waits_completed, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&task->runtime->waits_completed, 1, memory_order_acq_rel);
 	return 0;
 }
 
-static int runtime_external_wait(struct runtime_task_arg *task,
-								 long delay_microseconds, size_t wait_no) {
+static int runtime_external_wait(struct runtime_task_arg *task, long delay_microseconds, size_t wait_no) {
 	struct external_wait *wait;
 	struct timespec start;
 	struct timespec now;
@@ -983,8 +917,7 @@ static int runtime_external_wait(struct runtime_task_arg *task,
 	clock_gettime(CLOCK_REALTIME, &start);
 	wait->deadline = start;
 	add_microseconds(&wait->deadline, delay_microseconds);
-	if (croutine_wait_handle_init_complex(&wait->handle, current, 2, wait,
-										  external_deadline_checker) != 0) {
+	if (croutine_wait_handle_init_complex(&wait->handle, current, 2, wait, external_deadline_checker) != 0) {
 		external_wait_free(wait);
 		return -1;
 	}
@@ -995,8 +928,7 @@ static int runtime_external_wait(struct runtime_task_arg *task,
 		return -1;
 	}
 
-	log_event("task %zu wait %zu EXTERNAL %.2fms", task->id, wait_no,
-			  (double)delay_microseconds / 1000.0);
+	log_event("task %zu wait %zu EXTERNAL %.2fms", task->id, wait_no, (double)delay_microseconds / 1000.0);
 	if (external_source_add_wait(task->external, wait) != 0) {
 		if (croutine_cancel_await() != 0)
 			abort();
@@ -1006,8 +938,7 @@ static int runtime_external_wait(struct runtime_task_arg *task,
 	}
 
 	task->external_waits++;
-	atomic_fetch_add_explicit(&task->runtime->waits_started, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&task->runtime->waits_started, 1, memory_order_acq_rel);
 	croutine_yield();
 
 	clock_gettime(CLOCK_REALTIME, &now);
@@ -1021,31 +952,25 @@ static int runtime_external_wait(struct runtime_task_arg *task,
 		runtime_task_fail(task, "external wait remained queued");
 		return -1;
 	}
-	if (atomic_load_explicit(&wait->handle.state, memory_order_acquire) !=
-		CROUTINE_WAIT_HANDLE_FINISHED) {
+	if (atomic_load_explicit(&wait->handle.state, memory_order_acquire) != CROUTINE_WAIT_HANDLE_FINISHED) {
 		(void)external_wait_put(wait);
 		runtime_task_fail(task, "external wait handle did not finish");
 		return -1;
 	}
 
-	update_wait_metrics(task, delay_microseconds, &start, &wait->deadline,
-						&now);
-	log_event("task %zu wait %zu EXTERNAL ready elapsed %.2fms late %.2fms",
-			  task->id, wait_no,
+	update_wait_metrics(task, delay_microseconds, &start, &wait->deadline, &now);
+	log_event("task %zu wait %zu EXTERNAL ready elapsed %.2fms late %.2fms", task->id, wait_no,
 			  (double)timespec_diff_us(&now, &start) / 1000.0,
 			  (double)timespec_diff_us(&now, &wait->deadline) / 1000.0);
 	if (external_wait_put(wait) < 0) {
 		runtime_task_fail(task, "external wait release failed");
 		return -1;
 	}
-	atomic_fetch_add_explicit(&task->runtime->waits_completed, 1,
-							  memory_order_acq_rel);
+	atomic_fetch_add_explicit(&task->runtime->waits_completed, 1, memory_order_acq_rel);
 	return 0;
 }
 
-static enum runtime_wait_kind
-choose_wait_kind(const struct runtime_task_arg *task, size_t index,
-				 uint32_t random) {
+static enum runtime_wait_kind choose_wait_kind(const struct runtime_task_arg *task, size_t index, uint32_t random) {
 	if (task->id < task->runtime->initial_tasks && index == 0)
 		return RUNTIME_WAIT_TIMER;
 	if (((random >> 5) + task->id + index) % 3 == 0)
@@ -1053,8 +978,7 @@ choose_wait_kind(const struct runtime_task_arg *task, size_t index,
 	return RUNTIME_WAIT_TIMER;
 }
 
-static long choose_wait_delay(const struct runtime_task_arg *task,
-							  enum runtime_wait_kind kind, size_t index,
+static long choose_wait_delay(const struct runtime_task_arg *task, enum runtime_wait_kind kind, size_t index,
 							  uint32_t random) {
 	long delay;
 
@@ -1070,8 +994,7 @@ static long choose_wait_delay(const struct runtime_task_arg *task,
 	return delay;
 }
 
-static void runtime_queue_stress(struct runtime_task_arg *task,
-								 size_t iteration, uint32_t random) {
+static void runtime_queue_stress(struct runtime_task_arg *task, size_t iteration, uint32_t random) {
 	struct runtime_state *runtime = task->runtime;
 
 	(void)iteration;
@@ -1082,8 +1005,7 @@ static void runtime_queue_stress(struct runtime_task_arg *task,
 
 		if (cpu_target > 0) {
 			clock_gettime(CLOCK_MONOTONIC, &cpu_start);
-			burn_for_microseconds(cpu_target, random ^ (uint32_t)task->id ^
-												  (uint32_t)index);
+			burn_for_microseconds(cpu_target, random ^ (uint32_t)task->id ^ (uint32_t)index);
 			clock_gettime(CLOCK_MONOTONIC, &cpu_end);
 			task->cpu_work_us += timespec_diff_us(&cpu_end, &cpu_start);
 		}
@@ -1099,15 +1021,13 @@ static void *runtime_task(void *arg) {
 	struct timespec task_start;
 	struct timespec task_end;
 
-	if (croutine_task_current() == NULL ||
-		croutine_scheduler_current() == NULL) {
+	if (croutine_task_current() == NULL || croutine_scheduler_current() == NULL) {
 		runtime_task_fail(task, "missing runtime TLS");
 		return NULL;
 	}
 
 	clock_gettime(CLOCK_MONOTONIC, &task_start);
-	log_event("task %zu start repeat=%zu seed=0x%08x", task->id, task->repeat,
-			  task->seed);
+	log_event("task %zu start repeat=%zu seed=0x%08x", task->id, task->repeat, task->seed);
 	atomic_fetch_add_explicit(&runtime->started, 1, memory_order_acq_rel);
 	for (size_t index = 0; index < task->repeat; index++) {
 		struct timespec cpu_start;
@@ -1126,20 +1046,18 @@ static void *runtime_task(void *arg) {
 
 		random = runtime_random_u32();
 		cpu_target = CPU_MIN_US + (long)(random % CPU_SPAN_US);
-		log_event("task %zu iter %zu/%zu CPU target %.2fms", task->id,
-				  index + 1, task->repeat, (double)cpu_target / 1000.0);
+		log_event("task %zu iter %zu/%zu CPU target %.2fms", task->id, index + 1, task->repeat,
+				  (double)cpu_target / 1000.0);
 		clock_gettime(CLOCK_MONOTONIC, &cpu_start);
 		burn_for_microseconds(cpu_target, random ^ (uint32_t)task->id);
 		clock_gettime(CLOCK_MONOTONIC, &cpu_end);
 		cpu_us = timespec_diff_us(&cpu_end, &cpu_start);
 		task->cpu_work_us += cpu_us;
 
-		runs =
-			atomic_fetch_add_explicit(&task->runs, 1, memory_order_acq_rel) + 1;
-		atomic_fetch_add_explicit(&runtime->iterations, 1,
-								  memory_order_acq_rel);
-		log_event("task %zu iter %zu/%zu CPU actual %.2fms", task->id,
-				  index + 1, task->repeat, (double)cpu_us / 1000.0);
+		runs = atomic_fetch_add_explicit(&task->runs, 1, memory_order_acq_rel) + 1;
+		atomic_fetch_add_explicit(&runtime->iterations, 1, memory_order_acq_rel);
+		log_event("task %zu iter %zu/%zu CPU actual %.2fms", task->id, index + 1, task->repeat,
+				  (double)cpu_us / 1000.0);
 
 		runtime_queue_stress(task, index, random);
 
@@ -1154,13 +1072,10 @@ static void *runtime_task(void *arg) {
 		}
 
 		if (((random >> 21) & 3u) == 0) {
-			log_event("task %zu iter %zu/%zu voluntary yield", task->id,
-					  index + 1, task->repeat);
-			atomic_fetch_add_explicit(&runtime->yields, 1,
-									  memory_order_acq_rel);
+			log_event("task %zu iter %zu/%zu voluntary yield", task->id, index + 1, task->repeat);
+			atomic_fetch_add_explicit(&runtime->yields, 1, memory_order_acq_rel);
 			croutine_yield();
-			log_event("task %zu iter %zu/%zu yield returned", task->id,
-					  index + 1, task->repeat);
+			log_event("task %zu iter %zu/%zu yield returned", task->id, index + 1, task->repeat);
 		}
 	}
 
@@ -1168,17 +1083,13 @@ static void *runtime_task(void *arg) {
 	clock_gettime(CLOCK_MONOTONIC, &task_end);
 	task->runtime_us = timespec_diff_us(&task_end, &task_start);
 	atomic_fetch_add_explicit(&runtime->finished, 1, memory_order_acq_rel);
-	log_event(
-		"task %zu finish timer=%zu external=%zu runtime=%.2fms result=%zu",
-		task->id, task->timer_waits, task->external_waits,
-		(double)task->runtime_us / 1000.0, task->result);
+	log_event("task %zu finish timer=%zu external=%zu runtime=%.2fms result=%zu", task->id, task->timer_waits,
+			  task->external_waits, (double)task->runtime_us / 1000.0, task->result);
 	return &task->result;
 }
 
-static void init_runtime_task(struct runtime_task_arg *task,
-							  struct runtime_state *runtime,
-							  struct allocation_stats *allocs,
-							  struct external_source *external, size_t id,
+static void init_runtime_task(struct runtime_task_arg *task, struct runtime_state *runtime,
+							  struct allocation_stats *allocs, struct external_source *external, size_t id,
 							  size_t repeat) {
 	task->runtime = runtime;
 	task->allocs = allocs;
@@ -1203,8 +1114,7 @@ static void *producer_main(void *arg) {
 	struct producer_arg *producer = arg;
 
 	for (size_t index = 0; index < producer->count; index++) {
-		struct runtime_task_arg *task =
-			&producer->tasks[producer->first + index];
+		struct runtime_task_arg *task = &producer->tasks[producer->first + index];
 
 		log_event("producer spawn task %zu", task->id);
 		if (croutine_spawn(producer->scheduler, runtime_task, task) != 0) {
@@ -1213,11 +1123,8 @@ static void *producer_main(void *arg) {
 			return NULL;
 		}
 
-		atomic_fetch_add_explicit(&task->runtime->spawned, 1,
-								  memory_order_acq_rel);
-		sleep_microseconds(PRODUCER_GAP_US +
-						   (long)(task->id % PRODUCER_TASK_REPEAT_SPAN) *
-							   PRODUCER_GAP_STEP_US);
+		atomic_fetch_add_explicit(&task->runtime->spawned, 1, memory_order_acq_rel);
+		sleep_microseconds(PRODUCER_GAP_US + (long)(task->id % PRODUCER_TASK_REPEAT_SPAN) * PRODUCER_GAP_STEP_US);
 	}
 
 	return NULL;
@@ -1230,33 +1137,27 @@ static void *chain_producer_main(void *arg) {
 	if (producer == NULL)
 		return NULL;
 
-	batch_size =
-		producer->batch_size == 0 ? producer->count : producer->batch_size;
-	log_event("external chain producer start first=%zu count=%zu batch=%zu",
-			  producer->first, producer->count, batch_size);
+	batch_size = producer->batch_size == 0 ? producer->count : producer->batch_size;
+	log_event("external chain producer start first=%zu count=%zu batch=%zu", producer->first, producer->count,
+			  batch_size);
 	for (size_t batch_first = 0; batch_first < producer->count;) {
 		size_t batch_last = batch_first + batch_size;
 
 		if (batch_last > producer->count)
 			batch_last = producer->count;
 
-		log_event("external chain producer batch spawn tasks %zu..%zu",
-				  producer->first + batch_first,
+		log_event("external chain producer batch spawn tasks %zu..%zu", producer->first + batch_first,
 				  producer->first + batch_last - 1);
 		for (size_t index = batch_first; index < batch_last; index++) {
-			struct runtime_task_arg *task =
-				&producer->tasks[producer->first + index];
+			struct runtime_task_arg *task = &producer->tasks[producer->first + index];
 
 			if (croutine_spawn(producer->scheduler, runtime_task, task) != 0) {
-				fprintf(stderr, "chain producer failed to spawn task %zu\n",
-						task->id);
-				atomic_store_explicit(producer->failed, 1,
-									  memory_order_release);
+				fprintf(stderr, "chain producer failed to spawn task %zu\n", task->id);
+				atomic_store_explicit(producer->failed, 1, memory_order_release);
 				return NULL;
 			}
 
-			atomic_fetch_add_explicit(&task->runtime->spawned, 1,
-									  memory_order_acq_rel);
+			atomic_fetch_add_explicit(&task->runtime->spawned, 1, memory_order_acq_rel);
 		}
 
 		batch_first = batch_last;
@@ -1273,8 +1174,7 @@ static void *chain_producer_main(void *arg) {
  * Scheduler load sampling
  */
 
-static void load_sampler_take_sample(const struct load_sampler_arg *sampler,
-									 struct load_sample *sample) {
+static void load_sampler_take_sample(const struct load_sampler_arg *sampler, struct load_sample *sample) {
 	const croutine_scheduler *scheduler = sampler->scheduler;
 	struct timespec now;
 
@@ -1340,8 +1240,7 @@ static void load_sampler_record(struct load_sampler_arg *sampler) {
 			sampler->failed = 1;
 			return;
 		}
-		capacity = sampler->capacity == 0 ? LOAD_SAMPLE_INITIAL_CAPACITY :
-											sampler->capacity * 2;
+		capacity = sampler->capacity == 0 ? LOAD_SAMPLE_INITIAL_CAPACITY : sampler->capacity * 2;
 		if (capacity > SIZE_MAX / sizeof(samples[0])) {
 			sampler->failed = 1;
 			return;
@@ -1362,8 +1261,7 @@ static void load_sampler_record(struct load_sampler_arg *sampler) {
 static void *load_sampler_main(void *arg) {
 	struct load_sampler_arg *sampler = arg;
 
-	while (atomic_load_explicit(&sampler->stopping, memory_order_acquire) ==
-		   0) {
+	while (atomic_load_explicit(&sampler->stopping, memory_order_acquire) == 0) {
 		load_sampler_record(sampler);
 		sleep_microseconds(LOAD_SAMPLE_INTERVAL_US);
 	}
@@ -1375,8 +1273,7 @@ static double load_average_value(size_t avg_fp) {
 	return (double)avg_fp / 256.0;
 }
 
-static void load_sampler_summarize(const struct load_sampler_arg *sampler,
-								   struct load_sampler_summary *summary) {
+static void load_sampler_summarize(const struct load_sampler_arg *sampler, struct load_sampler_summary *summary) {
 	if (sampler == NULL || summary == NULL || sampler->count == 0)
 		return;
 
@@ -1399,8 +1296,7 @@ static void load_sampler_summarize(const struct load_sampler_arg *sampler,
 
 	summary->duration_us = sampler->samples[sampler->count - 1].elapsed_us;
 	summary->last_avg_fp = sampler->samples[sampler->count - 1].avg_fp;
-	summary->last_sample_count =
-		sampler->samples[sampler->count - 1].sample_count;
+	summary->last_sample_count = sampler->samples[sampler->count - 1].sample_count;
 	summary->last_running = sampler->samples[sampler->count - 1].running;
 	summary->last_waiting = sampler->samples[sampler->count - 1].waiting;
 	summary->last_suspended = sampler->samples[sampler->count - 1].suspended;
@@ -1434,15 +1330,14 @@ static void print_load_curve_bar(size_t avg_fp, size_t max_avg_fp) {
 	putchar(']');
 }
 
-static void
-print_load_average_curve(const struct load_sampler_arg *sampler,
-						 const struct load_sampler_summary *summary) {
+static void print_load_average_curve(const struct load_sampler_arg *sampler,
+									 const struct load_sampler_summary *summary) {
 	if (sampler == NULL || summary == NULL || sampler->count == 0)
 		return;
 
 	printf("\nlocal queue average curve\n");
-	printf("  scale: bar width %d, peak worker-local average %.2f\n",
-		   LOAD_CURVE_WIDTH, load_average_value(summary->max_avg_fp));
+	printf("  scale: bar width %d, peak worker-local average %.2f\n", LOAD_CURVE_WIDTH,
+		   load_average_value(summary->max_avg_fp));
 	printf("  ms       avg    main local inbox lmax imax  "
 		   "workers(r/w/s/x)  worker_count  curve\n");
 
@@ -1451,11 +1346,9 @@ print_load_average_curve(const struct load_sampler_arg *sampler,
 
 		printf("  %7.2f %6.2f %5zu %5zu %5zu %4zu %4zu  "
 			   "%3zu/%3zu/%3zu/%3zu  %12zu  ",
-			   (double)sample->elapsed_us / 1000.0,
-			   load_average_value(sample->avg_fp), sample->main_len,
-			   sample->local_total, sample->inbox_total, sample->local_max,
-			   sample->inbox_max, sample->running, sample->waiting,
-			   sample->suspended, sample->exiting, sample->sample_count);
+			   (double)sample->elapsed_us / 1000.0, load_average_value(sample->avg_fp), sample->main_len,
+			   sample->local_total, sample->inbox_total, sample->local_max, sample->inbox_max, sample->running,
+			   sample->waiting, sample->suspended, sample->exiting, sample->sample_count);
 		print_load_curve_bar(sample->avg_fp, summary->max_avg_fp);
 		putchar('\n');
 	}
@@ -1472,18 +1365,13 @@ static void print_load_sampler_report(const struct load_sampler_arg *sampler) {
 	printf("\nload sampler report\n");
 	printf("  overview\n");
 	printf("    %-24s %zu\n", "samples", sampler->count);
-	printf("    %-24s %.2fms\n", "interval",
-		   (double)LOAD_SAMPLE_INTERVAL_US / 1000.0);
-	printf("    %-24s %.2fms\n", "observed_duration",
-		   (double)summary.duration_us / 1000.0);
-	printf("    %-24s %s\n", "sampler_status",
-		   sampler->failed ? "failed" : "ok");
+	printf("    %-24s %.2fms\n", "interval", (double)LOAD_SAMPLE_INTERVAL_US / 1000.0);
+	printf("    %-24s %.2fms\n", "observed_duration", (double)summary.duration_us / 1000.0);
+	printf("    %-24s %s\n", "sampler_status", sampler->failed ? "failed" : "ok");
 
 	printf("  local_queue_average\n");
-	printf("    %-24s %.2f\n", "peak_worker_local_avg",
-		   load_average_value(summary.max_avg_fp));
-	printf("    %-24s %.2f\n", "final_worker_local_avg",
-		   load_average_value(summary.last_avg_fp));
+	printf("    %-24s %.2f\n", "peak_worker_local_avg", load_average_value(summary.max_avg_fp));
+	printf("    %-24s %.2f\n", "final_worker_local_avg", load_average_value(summary.last_avg_fp));
 	printf("    %-24s %zu\n", "worker_count", summary.last_sample_count);
 
 	printf("  queues\n");
@@ -1494,9 +1382,8 @@ static void print_load_sampler_report(const struct load_sampler_arg *sampler) {
 	printf("    %-24s %zu\n", "peak_inbox_worker", summary.max_inbox_worker);
 
 	printf("  final_worker_states\n");
-	printf("    %-24s %zu/%zu/%zu/%zu\n", "running/waiting/susp/ex",
-		   summary.last_running, summary.last_waiting, summary.last_suspended,
-		   summary.last_exiting);
+	printf("    %-24s %zu/%zu/%zu/%zu\n", "running/waiting/susp/ex", summary.last_running, summary.last_waiting,
+		   summary.last_suspended, summary.last_exiting);
 
 	print_load_average_curve(sampler, &summary);
 }
@@ -1505,17 +1392,13 @@ static void print_load_sampler_report(const struct load_sampler_arg *sampler) {
  * Verification and reporting
  */
 
-static int
-wait_for_at_least(_Atomic size_t *value, size_t target,
-				  const struct runtime_state *runtime,
-				  const struct timer_source_stats *timer_stats,
-				  const struct external_source_stats *external_stats) {
+static int wait_for_at_least(_Atomic size_t *value, size_t target, const struct runtime_state *runtime,
+							 const struct timer_source_stats *timer_stats,
+							 const struct external_source_stats *external_stats) {
 	for (size_t round = 0; round < WAIT_ROUNDS; round++) {
 		if (atomic_load_explicit(&runtime->failed, memory_order_acquire) != 0 ||
-			atomic_load_explicit(&timer_stats->failed, memory_order_acquire) !=
-				0 ||
-			atomic_load_explicit(&external_stats->failed,
-								 memory_order_acquire) != 0)
+			atomic_load_explicit(&timer_stats->failed, memory_order_acquire) != 0 ||
+			atomic_load_explicit(&external_stats->failed, memory_order_acquire) != 0)
 			return -1;
 		if (atomic_load_explicit(value, memory_order_acquire) >= target)
 			return 0;
@@ -1525,16 +1408,13 @@ wait_for_at_least(_Atomic size_t *value, size_t target,
 	return -1;
 }
 
-static int wait_for_flag(_Atomic int *value,
-						 const struct runtime_state *runtime,
+static int wait_for_flag(_Atomic int *value, const struct runtime_state *runtime,
 						 const struct timer_source_stats *timer_stats,
 						 const struct external_source_stats *external_stats) {
 	for (size_t round = 0; round < WAIT_ROUNDS; round++) {
 		if (atomic_load_explicit(&runtime->failed, memory_order_acquire) != 0 ||
-			atomic_load_explicit(&timer_stats->failed, memory_order_acquire) !=
-				0 ||
-			atomic_load_explicit(&external_stats->failed,
-								 memory_order_acquire) != 0)
+			atomic_load_explicit(&timer_stats->failed, memory_order_acquire) != 0 ||
+			atomic_load_explicit(&external_stats->failed, memory_order_acquire) != 0)
 			return -1;
 		if (atomic_load_explicit(value, memory_order_acquire) != 0)
 			return 0;
@@ -1544,25 +1424,19 @@ static int wait_for_flag(_Atomic int *value,
 	return -1;
 }
 
-static int
-wait_for_workers_in_state(const croutine_scheduler *scheduler,
-						  enum croutine_worker_state expected,
-						  const struct runtime_state *runtime,
-						  const struct timer_source_stats *timer_stats,
-						  const struct external_source_stats *external_stats) {
+static int wait_for_workers_in_state(const croutine_scheduler *scheduler, enum croutine_worker_state expected,
+									 const struct runtime_state *runtime, const struct timer_source_stats *timer_stats,
+									 const struct external_source_stats *external_stats) {
 	for (size_t round = 0; round < WAIT_ROUNDS; round++) {
 		size_t matched = 0;
 
 		if (atomic_load_explicit(&runtime->failed, memory_order_acquire) != 0 ||
-			atomic_load_explicit(&timer_stats->failed, memory_order_acquire) !=
-				0 ||
-			atomic_load_explicit(&external_stats->failed,
-								 memory_order_acquire) != 0)
+			atomic_load_explicit(&timer_stats->failed, memory_order_acquire) != 0 ||
+			atomic_load_explicit(&external_stats->failed, memory_order_acquire) != 0)
 			return -1;
 
 		for (size_t index = 0; index < scheduler->worker_count; index++) {
-			if (atomic_load_explicit(&scheduler->workers[index].state,
-									 memory_order_acquire) == expected)
+			if (atomic_load_explicit(&scheduler->workers[index].state, memory_order_acquire) == expected)
 				matched++;
 		}
 		if (matched == scheduler->worker_count)
@@ -1573,8 +1447,7 @@ wait_for_workers_in_state(const croutine_scheduler *scheduler,
 	return -1;
 }
 
-static size_t expected_iterations(const struct runtime_task_arg *tasks,
-								  size_t count) {
+static size_t expected_iterations(const struct runtime_task_arg *tasks, size_t count) {
 	size_t expected = 0;
 
 	for (size_t index = 0; index < count; index++)
@@ -1582,8 +1455,8 @@ static size_t expected_iterations(const struct runtime_task_arg *tasks,
 	return expected;
 }
 
-static void sum_task_waits(const struct runtime_task_arg *tasks, size_t count,
-						   size_t *timer_waits, size_t *external_waits) {
+static void sum_task_waits(const struct runtime_task_arg *tasks, size_t count, size_t *timer_waits,
+						   size_t *external_waits) {
 	*timer_waits = 0;
 	*external_waits = 0;
 	for (size_t index = 0; index < count; index++) {
@@ -1592,8 +1465,7 @@ static void sum_task_waits(const struct runtime_task_arg *tasks, size_t count,
 	}
 }
 
-static int verify_tasks(const struct runtime_task_arg *tasks, size_t count,
-						size_t total_iterations) {
+static int verify_tasks(const struct runtime_task_arg *tasks, size_t count, size_t total_iterations) {
 	size_t expected = 0;
 	size_t late_warnings = 0;
 
@@ -1603,23 +1475,19 @@ static int verify_tasks(const struct runtime_task_arg *tasks, size_t count,
 		runs = atomic_load_explicit(&tasks[index].runs, memory_order_acquire);
 		expected += tasks[index].repeat;
 		if (runs != tasks[index].repeat) {
-			fprintf(stderr, "task %zu ran %zu/%zu iterations\n",
-					tasks[index].id, runs, tasks[index].repeat);
+			fprintf(stderr, "task %zu ran %zu/%zu iterations\n", tasks[index].id, runs, tasks[index].repeat);
 			return -1;
 		}
 		if (tasks[index].wakes != tasks[index].repeat) {
-			fprintf(stderr, "task %zu woke %zu/%zu times\n", tasks[index].id,
-					tasks[index].wakes, tasks[index].repeat);
+			fprintf(stderr, "task %zu woke %zu/%zu times\n", tasks[index].id, tasks[index].wakes, tasks[index].repeat);
 			return -1;
 		}
 		if (tasks[index].elapsed_wait_us < tasks[index].requested_wait_us) {
-			fprintf(stderr, "task %zu elapsed wait shorter than requested\n",
-					tasks[index].id);
+			fprintf(stderr, "task %zu elapsed wait shorter than requested\n", tasks[index].id);
 			return -1;
 		}
 		if (tasks[index].max_late_us > MAX_ALLOWED_LATE_US) {
-			fprintf(stderr, "task %zu late wait exceeded watchdog\n",
-					tasks[index].id);
+			fprintf(stderr, "task %zu late wait exceeded watchdog\n", tasks[index].id);
 			return -1;
 		}
 		if (tasks[index].max_late_us > LATE_WAIT_WARNING_US)
@@ -1632,16 +1500,14 @@ static int verify_tasks(const struct runtime_task_arg *tasks, size_t count,
 				late_warnings, (double)LATE_WAIT_WARNING_US / 1000000.0);
 
 	if (total_iterations != expected) {
-		fprintf(stderr, "runtime iteration count %zu/%zu\n", total_iterations,
-				expected);
+		fprintf(stderr, "runtime iteration count %zu/%zu\n", total_iterations, expected);
 		return -1;
 	}
 
 	return 0;
 }
 
-static int verify_stopped_deadline_resume(const struct runtime_task_arg *tasks,
-										  size_t initial_tasks) {
+static int verify_stopped_deadline_resume(const struct runtime_task_arg *tasks, size_t initial_tasks) {
 	for (size_t index = 0; index < initial_tasks; index++) {
 		if (tasks[index].max_late_us >= (uint64_t)STOP_PAUSE_US / 3)
 			return 0;
@@ -1657,34 +1523,26 @@ static int verify_allocations(const struct allocation_stats *allocs) {
 	size_t external_allocs;
 	size_t external_frees;
 
-	timer_allocs =
-		atomic_load_explicit(&allocs->timer_wait_allocs, memory_order_acquire);
-	timer_frees =
-		atomic_load_explicit(&allocs->timer_wait_frees, memory_order_acquire);
-	external_allocs = atomic_load_explicit(&allocs->external_wait_allocs,
-										   memory_order_acquire);
-	external_frees = atomic_load_explicit(&allocs->external_wait_frees,
-										  memory_order_acquire);
+	timer_allocs = atomic_load_explicit(&allocs->timer_wait_allocs, memory_order_acquire);
+	timer_frees = atomic_load_explicit(&allocs->timer_wait_frees, memory_order_acquire);
+	external_allocs = atomic_load_explicit(&allocs->external_wait_allocs, memory_order_acquire);
+	external_frees = atomic_load_explicit(&allocs->external_wait_frees, memory_order_acquire);
 
 	if (timer_allocs != timer_frees) {
-		fprintf(stderr, "timer wait allocation leak: alloc=%zu free=%zu\n",
-				timer_allocs, timer_frees);
+		fprintf(stderr, "timer wait allocation leak: alloc=%zu free=%zu\n", timer_allocs, timer_frees);
 		return -1;
 	}
 	if (external_allocs != external_frees) {
-		fprintf(stderr, "external wait allocation leak: alloc=%zu free=%zu\n",
-				external_allocs, external_frees);
+		fprintf(stderr, "external wait allocation leak: alloc=%zu free=%zu\n", external_allocs, external_frees);
 		return -1;
 	}
 	return 0;
 }
 
-static void
-print_runtime_report(const struct runtime_task_arg *tasks,
-					 const struct runtime_state *runtime,
-					 const struct timer_source_stats *timer_stats,
-					 const struct external_source_stats *external_stats,
-					 const struct allocation_stats *allocs, size_t expected) {
+static void print_runtime_report(const struct runtime_task_arg *tasks, const struct runtime_state *runtime,
+								 const struct timer_source_stats *timer_stats,
+								 const struct external_source_stats *external_stats,
+								 const struct allocation_stats *allocs, size_t expected) {
 	uint64_t total_requested = 0;
 	uint64_t total_elapsed = 0;
 	uint64_t total_cpu = 0;
@@ -1734,89 +1592,56 @@ print_runtime_report(const struct runtime_task_arg *tasks,
 	spawned = atomic_load_explicit(&runtime->spawned, memory_order_acquire);
 	started = atomic_load_explicit(&runtime->started, memory_order_acquire);
 	finished = atomic_load_explicit(&runtime->finished, memory_order_acquire);
-	iterations =
-		atomic_load_explicit(&runtime->iterations, memory_order_acquire);
+	iterations = atomic_load_explicit(&runtime->iterations, memory_order_acquire);
 	yields = atomic_load_explicit(&runtime->yields, memory_order_acquire);
-	waits_started =
-		atomic_load_explicit(&runtime->waits_started, memory_order_acquire);
-	waits_completed =
-		atomic_load_explicit(&runtime->waits_completed, memory_order_acquire);
-	timer_created =
-		atomic_load_explicit(&timer_stats->created, memory_order_acquire);
-	timer_destroyed =
-		atomic_load_explicit(&timer_stats->destroyed, memory_order_acquire);
-	timer_registered =
-		atomic_load_explicit(&timer_stats->registered, memory_order_acquire);
-	timer_expired =
-		atomic_load_explicit(&timer_stats->expired, memory_order_acquire);
-	timer_local_wakes =
-		atomic_load_explicit(&timer_stats->local_wakes, memory_order_acquire);
-	timer_blocking_waits = atomic_load_explicit(&timer_stats->blocking_waits,
-												memory_order_acquire);
-	timer_timed_waits =
-		atomic_load_explicit(&timer_stats->timed_waits, memory_order_acquire);
-	timer_timeouts = atomic_load_explicit(&timer_stats->blocking_timeouts,
-										  memory_order_acquire);
-	timer_idle_waits =
-		atomic_load_explicit(&timer_stats->idle_waits, memory_order_acquire);
-	timer_interrupts = atomic_load_explicit(&timer_stats->wake_interrupts,
-											memory_order_acquire);
-	timer_suspends =
-		atomic_load_explicit(&timer_stats->suspends, memory_order_acquire);
-	timer_collects =
-		atomic_load_explicit(&timer_stats->collects, memory_order_acquire);
-	timer_wakes =
-		atomic_load_explicit(&timer_stats->wakes, memory_order_acquire);
-	timer_drained =
-		atomic_load_explicit(&timer_stats->drained, memory_order_acquire);
-	external_registered =
-		atomic_load_explicit(&external_stats->registered, memory_order_acquire);
-	external_early_rejected = atomic_load_explicit(
-		&external_stats->early_rejected, memory_order_acquire);
-	external_success = atomic_load_explicit(&external_stats->successful_wakes,
-											memory_order_acquire);
-	external_duplicate_rejected = atomic_load_explicit(
-		&external_stats->duplicate_rejected, memory_order_acquire);
-	external_timed_waits = atomic_load_explicit(&external_stats->timed_waits,
-												memory_order_acquire);
-	external_drained =
-		atomic_load_explicit(&external_stats->drained, memory_order_acquire);
-	timer_allocs =
-		atomic_load_explicit(&allocs->timer_wait_allocs, memory_order_acquire);
-	timer_frees =
-		atomic_load_explicit(&allocs->timer_wait_frees, memory_order_acquire);
-	external_allocs = atomic_load_explicit(&allocs->external_wait_allocs,
-										   memory_order_acquire);
-	external_frees = atomic_load_explicit(&allocs->external_wait_frees,
-										  memory_order_acquire);
+	waits_started = atomic_load_explicit(&runtime->waits_started, memory_order_acquire);
+	waits_completed = atomic_load_explicit(&runtime->waits_completed, memory_order_acquire);
+	timer_created = atomic_load_explicit(&timer_stats->created, memory_order_acquire);
+	timer_destroyed = atomic_load_explicit(&timer_stats->destroyed, memory_order_acquire);
+	timer_registered = atomic_load_explicit(&timer_stats->registered, memory_order_acquire);
+	timer_expired = atomic_load_explicit(&timer_stats->expired, memory_order_acquire);
+	timer_local_wakes = atomic_load_explicit(&timer_stats->local_wakes, memory_order_acquire);
+	timer_blocking_waits = atomic_load_explicit(&timer_stats->blocking_waits, memory_order_acquire);
+	timer_timed_waits = atomic_load_explicit(&timer_stats->timed_waits, memory_order_acquire);
+	timer_timeouts = atomic_load_explicit(&timer_stats->blocking_timeouts, memory_order_acquire);
+	timer_idle_waits = atomic_load_explicit(&timer_stats->idle_waits, memory_order_acquire);
+	timer_interrupts = atomic_load_explicit(&timer_stats->wake_interrupts, memory_order_acquire);
+	timer_suspends = atomic_load_explicit(&timer_stats->suspends, memory_order_acquire);
+	timer_collects = atomic_load_explicit(&timer_stats->collects, memory_order_acquire);
+	timer_wakes = atomic_load_explicit(&timer_stats->wakes, memory_order_acquire);
+	timer_drained = atomic_load_explicit(&timer_stats->drained, memory_order_acquire);
+	external_registered = atomic_load_explicit(&external_stats->registered, memory_order_acquire);
+	external_early_rejected = atomic_load_explicit(&external_stats->early_rejected, memory_order_acquire);
+	external_success = atomic_load_explicit(&external_stats->successful_wakes, memory_order_acquire);
+	external_duplicate_rejected = atomic_load_explicit(&external_stats->duplicate_rejected, memory_order_acquire);
+	external_timed_waits = atomic_load_explicit(&external_stats->timed_waits, memory_order_acquire);
+	external_drained = atomic_load_explicit(&external_stats->drained, memory_order_acquire);
+	timer_allocs = atomic_load_explicit(&allocs->timer_wait_allocs, memory_order_acquire);
+	timer_frees = atomic_load_explicit(&allocs->timer_wait_frees, memory_order_acquire);
+	external_allocs = atomic_load_explicit(&allocs->external_wait_allocs, memory_order_acquire);
+	external_frees = atomic_load_explicit(&allocs->external_wait_frees, memory_order_acquire);
 
 	printf("\nruntime report\n");
 	printf("  configuration\n");
 	printf("    %-28s %d\n", "workers", RUNTIME_WORKERS);
 	printf("    %-28s %d\n", "queue_check_interval", QUEUE_CHECK_INTERVAL);
-	printf("    %-28s %zu (%zu initial + %zu producer + %zu chain)\n", "tasks",
-		   runtime->total_tasks, runtime->initial_tasks,
-		   runtime->producer_tasks, runtime->chain_tasks);
-	printf("    %-28s %d every %.2fms\n", "chain_spawn_batch",
-		   CHAIN_PRODUCER_BATCH_SIZE, (double)CHAIN_PRODUCER_GAP_US / 1000.0);
+	printf("    %-28s %zu (%zu initial + %zu producer + %zu chain)\n", "tasks", runtime->total_tasks,
+		   runtime->initial_tasks, runtime->producer_tasks, runtime->chain_tasks);
+	printf("    %-28s %d every %.2fms\n", "chain_spawn_batch", CHAIN_PRODUCER_BATCH_SIZE,
+		   (double)CHAIN_PRODUCER_GAP_US / 1000.0);
 	printf("    %-28s 0x%08x\n", "random_seed", runtime->seed);
 	printf("    %-28s %zu\n", "planned_iterations", expected);
 
 	printf("  workload\n");
-	printf("    %-28s %.2fms..%.2fms\n", "cpu_per_iteration",
-		   (double)CPU_MIN_US / 1000.0,
+	printf("    %-28s %.2fms..%.2fms\n", "cpu_per_iteration", (double)CPU_MIN_US / 1000.0,
 		   (double)(CPU_MIN_US + CPU_SPAN_US) / 1000.0);
-	printf("    %-28s %zu yields x %.2fms\n", "queue_stress",
-		   runtime->queue_stress_yields,
+	printf("    %-28s %zu yields x %.2fms\n", "queue_stress", runtime->queue_stress_yields,
 		   (double)runtime->queue_stress_cpu_us / 1000.0);
-	printf("    %-28s %.2fms..%.2fms\n", "first_timer_wait",
-		   (double)FIRST_WAIT_MIN_US / 1000.0,
+	printf("    %-28s %.2fms..%.2fms\n", "first_timer_wait", (double)FIRST_WAIT_MIN_US / 1000.0,
 		   (double)(FIRST_WAIT_MIN_US + FIRST_WAIT_SPAN_US) / 1000.0);
-	printf("    %-28s %.2fms..%.2fms\n", "timer_wait",
-		   (double)TIMER_WAIT_MIN_US / 1000.0,
+	printf("    %-28s %.2fms..%.2fms\n", "timer_wait", (double)TIMER_WAIT_MIN_US / 1000.0,
 		   (double)(TIMER_WAIT_MIN_US + TIMER_WAIT_SPAN_US) / 1000.0);
-	printf("    %-28s %.2fms..%.2fms\n", "external_wait",
-		   (double)EXTERNAL_WAIT_MIN_US / 1000.0,
+	printf("    %-28s %.2fms..%.2fms\n", "external_wait", (double)EXTERNAL_WAIT_MIN_US / 1000.0,
 		   (double)(EXTERNAL_WAIT_MIN_US + EXTERNAL_WAIT_SPAN_US) / 1000.0);
 
 	printf("  lifecycle\n");
@@ -1833,16 +1658,13 @@ print_runtime_report(const struct runtime_task_arg *tasks,
 	printf("    %-28s %zu\n", "external_waits", external_waits);
 
 	printf("  timer_source\n");
-	printf("    %-28s %zu / %zu\n", "created/destroyed", timer_created,
-		   timer_destroyed);
-	printf("    %-28s %zu / %zu / %zu\n", "registered/expired/local_wake",
-		   timer_registered, timer_expired, timer_local_wakes);
-	printf("    %-28s %zu / %zu / %zu\n", "blocking/timed/timeout",
-		   timer_blocking_waits, timer_timed_waits, timer_timeouts);
-	printf("    %-28s %zu / %zu / %zu\n", "idle/interrupt/suspend",
-		   timer_idle_waits, timer_interrupts, timer_suspends);
-	printf("    %-28s %zu / %zu / %zu\n", "collect/wake/drained",
-		   timer_collects, timer_wakes, timer_drained);
+	printf("    %-28s %zu / %zu\n", "created/destroyed", timer_created, timer_destroyed);
+	printf("    %-28s %zu / %zu / %zu\n", "registered/expired/local_wake", timer_registered, timer_expired,
+		   timer_local_wakes);
+	printf("    %-28s %zu / %zu / %zu\n", "blocking/timed/timeout", timer_blocking_waits, timer_timed_waits,
+		   timer_timeouts);
+	printf("    %-28s %zu / %zu / %zu\n", "idle/interrupt/suspend", timer_idle_waits, timer_interrupts, timer_suspends);
+	printf("    %-28s %zu / %zu / %zu\n", "collect/wake/drained", timer_collects, timer_wakes, timer_drained);
 
 	printf("  external_source\n");
 	printf("    %-28s %zu\n", "registered", external_registered);
@@ -1853,44 +1675,31 @@ print_runtime_report(const struct runtime_task_arg *tasks,
 	printf("    %-28s %zu\n", "drained", external_drained);
 
 	printf("  allocations\n");
-	printf("    %-28s %zu / %zu\n", "timer_wait_alloc/free", timer_allocs,
-		   timer_frees);
-	printf("    %-28s %zu / %zu\n", "external_wait_alloc/free", external_allocs,
-		   external_frees);
+	printf("    %-28s %zu / %zu\n", "timer_wait_alloc/free", timer_allocs, timer_frees);
+	printf("    %-28s %zu / %zu\n", "external_wait_alloc/free", external_allocs, external_frees);
 
 	printf("  time_totals\n");
-	printf("    %-28s %.2fms\n", "requested_wait",
-		   (double)total_requested / 1000.0);
-	printf("    %-28s %.2fms\n", "elapsed_wait",
-		   (double)total_elapsed / 1000.0);
+	printf("    %-28s %.2fms\n", "requested_wait", (double)total_requested / 1000.0);
+	printf("    %-28s %.2fms\n", "elapsed_wait", (double)total_elapsed / 1000.0);
 	printf("    %-28s %.2fms\n", "cpu_work", (double)total_cpu / 1000.0);
-	printf("    %-28s %.2fms\n", "task_runtime_sum",
-		   (double)total_runtime / 1000.0);
+	printf("    %-28s %.2fms\n", "task_runtime_sum", (double)total_runtime / 1000.0);
 
 	printf("\ntask detail\n");
-	printf("  %3s %6s %6s %11s %12s %12s %12s %12s %12s %10s %12s %8s\n", "id",
-		   "repeat", "runs", "waits(t/e)", "requested_ms", "elapsed_ms",
-		   "avg_wait_ms", "max_wait_ms", "max_late_ms", "cpu_ms", "runtime_ms",
-		   "result");
+	printf("  %3s %6s %6s %11s %12s %12s %12s %12s %12s %10s %12s %8s\n", "id", "repeat", "runs", "waits(t/e)",
+		   "requested_ms", "elapsed_ms", "avg_wait_ms", "max_wait_ms", "max_late_ms", "cpu_ms", "runtime_ms", "result");
 	for (size_t index = 0; index < runtime->total_tasks; index++) {
 		const struct runtime_task_arg *task = &tasks[index];
 		double avg_wait_ms = 0.0;
 
 		if (task->wakes != 0)
-			avg_wait_ms =
-				(double)task->elapsed_wait_us / (double)task->wakes / 1000.0;
+			avg_wait_ms = (double)task->elapsed_wait_us / (double)task->wakes / 1000.0;
 
 		printf("  %3zu %6zu %6zu %5zu/%-5zu %12.2f %12.2f %12.2f "
 			   "%12.2f %12.2f %10.2f %12.2f %8zu\n",
-			   task->id, task->repeat,
-			   atomic_load_explicit(&task->runs, memory_order_acquire),
-			   task->timer_waits, task->external_waits,
-			   (double)task->requested_wait_us / 1000.0,
-			   (double)task->elapsed_wait_us / 1000.0, avg_wait_ms,
-			   (double)task->max_wait_us / 1000.0,
-			   (double)task->max_late_us / 1000.0,
-			   (double)task->cpu_work_us / 1000.0,
-			   (double)task->runtime_us / 1000.0, task->result);
+			   task->id, task->repeat, atomic_load_explicit(&task->runs, memory_order_acquire), task->timer_waits,
+			   task->external_waits, (double)task->requested_wait_us / 1000.0, (double)task->elapsed_wait_us / 1000.0,
+			   avg_wait_ms, (double)task->max_wait_us / 1000.0, (double)task->max_late_us / 1000.0,
+			   (double)task->cpu_work_us / 1000.0, (double)task->runtime_us / 1000.0, task->result);
 	}
 	printf("\n");
 }
@@ -2020,8 +1829,7 @@ int main(void) {
 		free(tasks);
 		return 1;
 	}
-	if (pthread_create(&external_thread, NULL, external_source_main,
-					   &external) != 0) {
+	if (pthread_create(&external_thread, NULL, external_source_main, &external) != 0) {
 		fprintf(stderr, "failed to start external source thread\n");
 		external_source_destroy(&external);
 		free(tasks);
@@ -2031,16 +1839,12 @@ int main(void) {
 
 	for (size_t index = 0; index < initial_tasks; index++)
 		init_runtime_task(&tasks[index], &runtime, &allocs, &external, index,
-						  INITIAL_TASK_REPEAT_MIN +
-							  (index % INITIAL_TASK_REPEAT_SPAN));
+						  INITIAL_TASK_REPEAT_MIN + (index % INITIAL_TASK_REPEAT_SPAN));
 	for (size_t index = initial_tasks; index < total_tasks; index++)
-		init_runtime_task(
-			&tasks[index], &runtime, &allocs, &external, index,
-			index < pre_chain_tasks ?
-				PRODUCER_TASK_REPEAT_MIN +
-					((index - initial_tasks) % PRODUCER_TASK_REPEAT_SPAN) :
-				CHAIN_TASK_REPEAT_MIN +
-					((index - pre_chain_tasks) % CHAIN_TASK_REPEAT_SPAN));
+		init_runtime_task(&tasks[index], &runtime, &allocs, &external, index,
+						  index < pre_chain_tasks ?
+							  PRODUCER_TASK_REPEAT_MIN + ((index - initial_tasks) % PRODUCER_TASK_REPEAT_SPAN) :
+							  CHAIN_TASK_REPEAT_MIN + ((index - pre_chain_tasks) % CHAIN_TASK_REPEAT_SPAN));
 	expected = expected_iterations(tasks, total_tasks);
 
 	/* Scheduler creation. */
@@ -2053,16 +1857,14 @@ int main(void) {
 
 	load_sampler.scheduler = scheduler;
 	atomic_init(&load_sampler.stopping, 0);
-	if (pthread_create(&load_sampler_thread, NULL, load_sampler_main,
-					   &load_sampler) != 0) {
+	if (pthread_create(&load_sampler_thread, NULL, load_sampler_main, &load_sampler) != 0) {
 		fprintf(stderr, "failed to start load sampler thread\n");
 		status = 1;
 		goto cleanup;
 	}
 	load_sampler_started = 1;
 
-	if (atomic_load_explicit(&timer_stats.created, memory_order_acquire) !=
-		RUNTIME_WORKERS) {
+	if (atomic_load_explicit(&timer_stats.created, memory_order_acquire) != RUNTIME_WORKERS) {
 		fprintf(stderr, "main event source count mismatch\n");
 		status = 1;
 		goto cleanup;
@@ -2078,13 +1880,10 @@ int main(void) {
 
 	/* Empty startup work wait. */
 	log_event("main wait for empty startup work wait");
-	if (wait_for_at_least(&timer_stats.idle_waits, RUNTIME_WORKERS, &runtime,
-						  &timer_stats, &external_stats) != 0 ||
-		wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SOURCE_WAITING,
-								  &runtime, &timer_stats,
-								  &external_stats) != 0 ||
-		atomic_load_explicit(&scheduler->waiting_workers,
-							 memory_order_acquire) != RUNTIME_WORKERS) {
+	if (wait_for_at_least(&timer_stats.idle_waits, RUNTIME_WORKERS, &runtime, &timer_stats, &external_stats) != 0 ||
+		wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SOURCE_WAITING, &runtime, &timer_stats, &external_stats) !=
+			0 ||
+		atomic_load_explicit(&scheduler->waiting_workers, memory_order_acquire) != RUNTIME_WORKERS) {
 		fprintf(stderr, "workers did not block for work after empty startup\n");
 		status = 1;
 		goto cleanup;
@@ -2097,8 +1896,7 @@ int main(void) {
 		goto cleanup;
 	}
 
-	empty_start_wakes =
-		atomic_load_explicit(&timer_stats.wakes, memory_order_acquire);
+	empty_start_wakes = atomic_load_explicit(&timer_stats.wakes, memory_order_acquire);
 
 	/* Initial task injection. */
 	log_event("main inject initial tasks into empty scheduler");
@@ -2111,14 +1909,12 @@ int main(void) {
 		}
 		atomic_fetch_add_explicit(&runtime.spawned, 1, memory_order_acq_rel);
 	}
-	if (atomic_load_explicit(&timer_stats.wakes, memory_order_acquire) <=
-		empty_start_wakes) {
+	if (atomic_load_explicit(&timer_stats.wakes, memory_order_acquire) <= empty_start_wakes) {
 		fprintf(stderr, "initial task injection did not wake event sources\n");
 		status = 1;
 		goto cleanup;
 	}
-	if (wait_for_at_least(&runtime.started, 1, &runtime, &timer_stats,
-						  &external_stats) != 0) {
+	if (wait_for_at_least(&runtime.started, 1, &runtime, &timer_stats, &external_stats) != 0) {
 		fprintf(stderr, "workers did not run injected initial tasks\n");
 		status = 1;
 		goto cleanup;
@@ -2126,8 +1922,7 @@ int main(void) {
 
 	/* Manual stop while waits are pending. */
 	log_event("main wait for %zu first timer registrations", stop_after_waits);
-	if (wait_for_at_least(&runtime.waits_started, stop_after_waits, &runtime,
-						  &timer_stats, &external_stats) != 0) {
+	if (wait_for_at_least(&runtime.waits_started, stop_after_waits, &runtime, &timer_stats, &external_stats) != 0) {
 		fprintf(stderr, "runtime did not reach first wait checkpoint\n");
 		status = 1;
 		goto cleanup;
@@ -2140,35 +1935,23 @@ int main(void) {
 		goto cleanup;
 	}
 	scheduler_started = 0;
-	if (atomic_load_explicit(&scheduler->waiting_workers,
-							 memory_order_acquire) != 0 ||
-		wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SUSPENDED, &runtime,
-								  &timer_stats, &external_stats) != 0) {
+	if (atomic_load_explicit(&scheduler->waiting_workers, memory_order_acquire) != 0 ||
+		wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SUSPENDED, &runtime, &timer_stats, &external_stats) != 0) {
 		fprintf(stderr, "workers did not converge after stop\n");
 		status = 1;
 		goto cleanup;
 	}
 
-	stopped_iterations =
-		atomic_load_explicit(&runtime.iterations, memory_order_acquire);
-	stopped_waits =
-		atomic_load_explicit(&runtime.waits_completed, memory_order_acquire);
-	stopped_finished =
-		atomic_load_explicit(&runtime.finished, memory_order_acquire);
-	printf(
-		"stop checkpoint: iterations=%zu waits_started=%zu waits_completed=%zu finished=%zu\n",
-		stopped_iterations,
-		atomic_load_explicit(&runtime.waits_started, memory_order_acquire),
-		stopped_waits, stopped_finished);
-	log_event("main pause while stopped %.2fs",
-			  (double)STOP_PAUSE_US / 1000000.0);
+	stopped_iterations = atomic_load_explicit(&runtime.iterations, memory_order_acquire);
+	stopped_waits = atomic_load_explicit(&runtime.waits_completed, memory_order_acquire);
+	stopped_finished = atomic_load_explicit(&runtime.finished, memory_order_acquire);
+	printf("stop checkpoint: iterations=%zu waits_started=%zu waits_completed=%zu finished=%zu\n", stopped_iterations,
+		   atomic_load_explicit(&runtime.waits_started, memory_order_acquire), stopped_waits, stopped_finished);
+	log_event("main pause while stopped %.2fs", (double)STOP_PAUSE_US / 1000000.0);
 	sleep_microseconds(STOP_PAUSE_US);
-	if (atomic_load_explicit(&runtime.iterations, memory_order_acquire) !=
-			stopped_iterations ||
-		atomic_load_explicit(&runtime.waits_completed, memory_order_acquire) !=
-			stopped_waits ||
-		atomic_load_explicit(&runtime.finished, memory_order_acquire) !=
-			stopped_finished) {
+	if (atomic_load_explicit(&runtime.iterations, memory_order_acquire) != stopped_iterations ||
+		atomic_load_explicit(&runtime.waits_completed, memory_order_acquire) != stopped_waits ||
+		atomic_load_explicit(&runtime.finished, memory_order_acquire) != stopped_finished) {
 		fprintf(stderr, "tasks continued running after stop\n");
 		status = 1;
 		goto cleanup;
@@ -2205,8 +1988,7 @@ int main(void) {
 	chain_producer.failed = &runtime.failed;
 	atomic_init(&chain_producer.done, 0);
 	log_event("main start external chain producer thread");
-	if (pthread_create(&chain_producer_thread, NULL, chain_producer_main,
-					   &chain_producer) != 0) {
+	if (pthread_create(&chain_producer_thread, NULL, chain_producer_main, &chain_producer) != 0) {
 		fprintf(stderr, "failed to start chain producer thread\n");
 		status = 1;
 		goto cleanup;
@@ -2229,21 +2011,18 @@ int main(void) {
 	chain_producer_started = 0;
 	log_event("main external chain producer joined");
 
-	if (wait_for_at_least(&runtime.spawned, total_tasks, &runtime, &timer_stats,
-						  &external_stats) != 0) {
+	if (wait_for_at_least(&runtime.spawned, total_tasks, &runtime, &timer_stats, &external_stats) != 0) {
 		fprintf(stderr, "chain producer did not spawn all tasks\n");
 		status = 1;
 		goto cleanup;
 	}
-	if (wait_for_flag(&chain_producer.done, &runtime, &timer_stats,
-					  &external_stats) != 0) {
+	if (wait_for_flag(&chain_producer.done, &runtime, &timer_stats, &external_stats) != 0) {
 		fprintf(stderr, "chain producer did not finish\n");
 		status = 1;
 		goto cleanup;
 	}
 
-	if (wait_for_at_least(&runtime.finished, total_tasks, &runtime,
-						  &timer_stats, &external_stats) != 0) {
+	if (wait_for_at_least(&runtime.finished, total_tasks, &runtime, &timer_stats, &external_stats) != 0) {
 		fprintf(stderr, "runtime tasks did not finish\n");
 		status = 1;
 		goto cleanup;
@@ -2251,11 +2030,9 @@ int main(void) {
 
 	/* Post-run work wait. */
 	log_event("main wait for post-run work wait");
-	if (wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SOURCE_WAITING,
-								  &runtime, &timer_stats,
-								  &external_stats) != 0 ||
-		atomic_load_explicit(&scheduler->waiting_workers,
-							 memory_order_acquire) != RUNTIME_WORKERS) {
+	if (wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SOURCE_WAITING, &runtime, &timer_stats, &external_stats) !=
+			0 ||
+		atomic_load_explicit(&scheduler->waiting_workers, memory_order_acquire) != RUNTIME_WORKERS) {
 		fprintf(stderr, "workers did not block after all tasks finished\n");
 		status = 1;
 		goto cleanup;
@@ -2268,10 +2045,8 @@ int main(void) {
 		goto cleanup;
 	}
 	scheduler_started = 0;
-	if (atomic_load_explicit(&scheduler->waiting_workers,
-							 memory_order_acquire) != 0 ||
-		wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SUSPENDED, &runtime,
-								  &timer_stats, &external_stats) != 0) {
+	if (atomic_load_explicit(&scheduler->waiting_workers, memory_order_acquire) != 0 ||
+		wait_for_workers_in_state(scheduler, CROUTINE_WORKER_SUSPENDED, &runtime, &timer_stats, &external_stats) != 0) {
 		fprintf(stderr, "workers did not suspend at shutdown\n");
 		status = 1;
 	}
@@ -2309,45 +2084,31 @@ cleanup:
 		atomic_load_explicit(&timer_stats.failed, memory_order_acquire) != 0 ||
 		atomic_load_explicit(&external_stats.failed, memory_order_acquire) != 0)
 		status = 1;
-	if (verify_tasks(tasks, total_tasks,
-					 atomic_load_explicit(&runtime.iterations,
-										  memory_order_acquire)) != 0)
+	if (verify_tasks(tasks, total_tasks, atomic_load_explicit(&runtime.iterations, memory_order_acquire)) != 0)
 		status = 1;
 	if (verify_stopped_deadline_resume(tasks, initial_tasks) != 0)
 		status = 1;
-	if (atomic_load_explicit(&runtime.spawned, memory_order_acquire) !=
-			total_tasks ||
-		atomic_load_explicit(&runtime.started, memory_order_acquire) !=
-			total_tasks ||
-		atomic_load_explicit(&runtime.finished, memory_order_acquire) !=
-			total_tasks) {
+	if (atomic_load_explicit(&runtime.spawned, memory_order_acquire) != total_tasks ||
+		atomic_load_explicit(&runtime.started, memory_order_acquire) != total_tasks ||
+		atomic_load_explicit(&runtime.finished, memory_order_acquire) != total_tasks) {
 		fprintf(stderr, "task lifecycle count mismatch\n");
 		status = 1;
 	}
-	if (atomic_load_explicit(&runtime.waits_started, memory_order_acquire) !=
-			expected ||
-		atomic_load_explicit(&runtime.waits_completed, memory_order_acquire) !=
-			expected) {
+	if (atomic_load_explicit(&runtime.waits_started, memory_order_acquire) != expected ||
+		atomic_load_explicit(&runtime.waits_completed, memory_order_acquire) != expected) {
 		fprintf(stderr, "wait lifecycle count mismatch\n");
 		status = 1;
 	}
-	if (atomic_load_explicit(&timer_stats.registered, memory_order_acquire) !=
-			timer_waits ||
-		atomic_load_explicit(&timer_stats.expired, memory_order_acquire) !=
-			timer_waits ||
-		atomic_load_explicit(&timer_stats.local_wakes, memory_order_acquire) !=
-			timer_waits) {
+	if (atomic_load_explicit(&timer_stats.registered, memory_order_acquire) != timer_waits ||
+		atomic_load_explicit(&timer_stats.expired, memory_order_acquire) != timer_waits ||
+		atomic_load_explicit(&timer_stats.local_wakes, memory_order_acquire) != timer_waits) {
 		fprintf(stderr, "timer source count mismatch\n");
 		status = 1;
 	}
-	if (atomic_load_explicit(&external_stats.registered,
-							 memory_order_acquire) != external_waits ||
-		atomic_load_explicit(&external_stats.early_rejected,
-							 memory_order_acquire) > external_waits ||
-		atomic_load_explicit(&external_stats.successful_wakes,
-							 memory_order_acquire) != external_waits ||
-		atomic_load_explicit(&external_stats.duplicate_rejected,
-							 memory_order_acquire) != external_waits) {
+	if (atomic_load_explicit(&external_stats.registered, memory_order_acquire) != external_waits ||
+		atomic_load_explicit(&external_stats.early_rejected, memory_order_acquire) > external_waits ||
+		atomic_load_explicit(&external_stats.successful_wakes, memory_order_acquire) != external_waits ||
+		atomic_load_explicit(&external_stats.duplicate_rejected, memory_order_acquire) != external_waits) {
 		fprintf(stderr, "external source count mismatch\n");
 		status = 1;
 	}
@@ -2355,39 +2116,26 @@ cleanup:
 		fprintf(stderr, "test did not cover both timer and external waits\n");
 		status = 1;
 	}
-	if (external_waits != 0 &&
-		atomic_load_explicit(&external_stats.early_rejected,
-							 memory_order_acquire) == 0) {
+	if (external_waits != 0 && atomic_load_explicit(&external_stats.early_rejected, memory_order_acquire) == 0) {
 		fprintf(stderr, "external early reject path was not exercised\n");
 		status = 1;
 	}
-	if (atomic_load_explicit(&timer_stats.created, memory_order_acquire) !=
-			RUNTIME_WORKERS ||
-		atomic_load_explicit(&timer_stats.destroyed, memory_order_acquire) !=
-			RUNTIME_WORKERS) {
+	if (atomic_load_explicit(&timer_stats.created, memory_order_acquire) != RUNTIME_WORKERS ||
+		atomic_load_explicit(&timer_stats.destroyed, memory_order_acquire) != RUNTIME_WORKERS) {
 		fprintf(stderr, "main event source destroy count mismatch\n");
 		status = 1;
 	}
-	if (atomic_load_explicit(&timer_stats.blocking_waits,
-							 memory_order_acquire) == 0 ||
-		atomic_load_explicit(&timer_stats.timed_waits, memory_order_acquire) ==
-			0 ||
-		atomic_load_explicit(&timer_stats.blocking_timeouts,
-							 memory_order_acquire) == 0 ||
-		atomic_load_explicit(&timer_stats.idle_waits, memory_order_acquire) <
-			RUNTIME_WORKERS * 2 ||
-		atomic_load_explicit(&timer_stats.collects, memory_order_acquire) ==
-			0 ||
-		atomic_load_explicit(&timer_stats.wake_interrupts,
-							 memory_order_acquire) == 0 ||
-		atomic_load_explicit(&timer_stats.suspends, memory_order_acquire) <
-			RUNTIME_WORKERS * 2) {
-		fprintf(stderr,
-				"timer blocking/collect paths were not all exercised\n");
+	if (atomic_load_explicit(&timer_stats.blocking_waits, memory_order_acquire) == 0 ||
+		atomic_load_explicit(&timer_stats.timed_waits, memory_order_acquire) == 0 ||
+		atomic_load_explicit(&timer_stats.blocking_timeouts, memory_order_acquire) == 0 ||
+		atomic_load_explicit(&timer_stats.idle_waits, memory_order_acquire) < RUNTIME_WORKERS * 2 ||
+		atomic_load_explicit(&timer_stats.collects, memory_order_acquire) == 0 ||
+		atomic_load_explicit(&timer_stats.wake_interrupts, memory_order_acquire) == 0 ||
+		atomic_load_explicit(&timer_stats.suspends, memory_order_acquire) < RUNTIME_WORKERS * 2) {
+		fprintf(stderr, "timer blocking/collect paths were not all exercised\n");
 		status = 1;
 	}
-	if (atomic_load_explicit(&external_stats.timed_waits,
-							 memory_order_acquire) == 0) {
+	if (atomic_load_explicit(&external_stats.timed_waits, memory_order_acquire) == 0) {
 		fprintf(stderr, "external timed wait path was not exercised\n");
 		status = 1;
 	}
@@ -2398,8 +2146,7 @@ cleanup:
 	if (verify_allocations(&allocs) != 0)
 		status = 1;
 
-	print_runtime_report(tasks, &runtime, &timer_stats, &external_stats,
-						 &allocs, expected);
+	print_runtime_report(tasks, &runtime, &timer_stats, &external_stats, &allocs, expected);
 	print_load_sampler_report(&load_sampler);
 	free(load_sampler.samples);
 	free(tasks);

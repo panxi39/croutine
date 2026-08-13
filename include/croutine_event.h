@@ -10,8 +10,7 @@ enum croutine_main_event_wait_result {
 };
 
 struct croutine_main_event_source {
-	enum croutine_main_event_wait_result (*blocking_wait)(
-		croutine_main_event_source *self);
+	enum croutine_main_event_wait_result (*blocking_wait)(croutine_main_event_source *self);
 	void (*collect)(croutine_main_event_source *self);
 	int (*wake)(croutine_main_event_source *self);
 	void (*suspend)(croutine_main_event_source *self);
